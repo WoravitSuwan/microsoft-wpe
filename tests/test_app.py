@@ -94,7 +94,20 @@ def admin(app):
 
 def do_import(client, f, owner="auto", name="ค่าเริ่มต้น__20261116_083829.xlsx"):
     return client.post("/import", data={"owner": owner, "file": (f, name)},
-                       content_type="multipart/form-data")
+                       content_type="multipart/form-data", follow_redirects=True)
+
+
+def chunked_import(client, data, chunk, owner="auto", token="ab" * 16, skip=None, headers=None):
+    n = max(1, -(-len(data) // chunk))
+    for i in range(n):
+        if i == skip:
+            continue
+        r = client.post("/import/chunk", data=data[i * chunk:(i + 1) * chunk],
+                        headers={"X-Upload-Token": token, "X-Chunk-Index": str(i),
+                                 "Content-Type": "application/octet-stream", **(headers or {})})
+        assert r.status_code == 200, r.get_data(as_text=True)
+    return client.post("/import/finish", data={"token": token, "chunks": n, "owner": owner,
+                                               "filename": "ค่าเริ่มต้น__20261116_083829.xlsx"})
 
 
 def owner_ids(app):
@@ -276,3 +289,70 @@ def test_vercel_requires_env(monkeypatch):
     monkeypatch.delenv("POSTGRES_URL", raising=False)
     with pytest.raises(mod.ConfigError):
         mod.create_app()
+
+
+def test_chunked_upload(app, admin, monkeypatch):
+    """ไฟล์ใหญ่ถูกแบ่งส่งทีละส่วน (Vercel จำกัด 4.5 MB ต่อคำขอ) ผลต้องเหมือนอัปโหลดครั้งเดียว"""
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
+    data = tpo_file(ROWS).getvalue()
+    assert len(data) > 3 * 1024
+    r = chunked_import(admin, data, 1024)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    url = r.get_json()["url"]
+    page = admin.get(url).get_data(as_text=True)
+    assert "นำเข้าสำเร็จ" in page and A in page and B in page
+    assert set(owner_ids(app)) == {A, B}
+    from caseapp.db import get_db
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM uploads").fetchone()[0] == 0
+        assert get_db().execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 3
+
+
+def test_chunked_upload_rejects_missing_part_and_other_users(app, admin, monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
+    data = tpo_file(ROWS).getvalue()
+    r = chunked_import(admin, data, 1024, skip=1)
+    assert r.status_code == 400 and "ไม่ครบ" in r.get_json()["error"]
+    # ส่วนที่ผู้ดูแลอัปโหลดไว้ ผู้ใช้อื่นนำไปใช้ไม่ได้
+    do_import(admin, tpo_file(ROWS))
+    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
+                                     "role": "officer", "owner_id": owner_ids(app)[A]})
+    for i in range(2):
+        admin.post("/import/chunk", data=data[i * 1024:(i + 1) * 1024],
+                   headers={"X-Upload-Token": "cd" * 16, "X-Chunk-Index": str(i)})
+    off = app.test_client()
+    off.post("/login", data={"username": "a", "password": "secret1"})
+    r = off.post("/import/finish", data={"token": "cd" * 16, "chunks": 2})
+    assert r.status_code == 400
+    # ขนาดส่วนเกินกำหนด
+    r = admin.post("/import/chunk", data=b"x" * 2048,
+                   headers={"X-Upload-Token": "ef" * 16, "X-Chunk-Index": "0"})
+    assert r.status_code == 400
+
+
+def test_chunk_requires_csrf_header(make_app):
+    app = make_app("c2", TESTING_NO_CSRF=False)
+    c = app.test_client()
+    page = c.get("/setup").get_data(as_text=True)
+    token = re.search(r'name="csrf" value="([0-9a-f]+)"', page)[1]
+    c.post("/setup", data={"username": "admin", "password": "secret1", "csrf": token})
+    # เข้าสู่ระบบแล้ว session ถูกสร้างใหม่: ใช้ token จากหน้านำเข้า
+    token = re.search(r'name="csrf" value="([0-9a-f]+)"', c.get("/import").get_data(as_text=True))[1]
+    hdr = {"X-Upload-Token": "ab" * 16, "X-Chunk-Index": "0"}
+    assert c.post("/import/chunk", data=b"PK", headers=hdr).status_code == 400
+    assert c.post("/import/chunk", data=b"PK", headers={**hdr, "X-CSRF-Token": token}).status_code == 200
+
+
+def test_owner_table_pagination_and_search(app, admin, monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "PAGE_SIZE", 1)
+    do_import(admin, tpo_file(ROWS))
+    oid = owner_ids(app)[A]
+    p1 = admin.get(f"/owners/{oid}?tab=s11").get_data(as_text=True)
+    p2 = admin.get(f"/owners/{oid}?tab=s11&page=2").get_data(as_text=True)
+    assert "T001" in p1 and "T002" not in p1 and "(หน้า 1/2)" in p1
+    assert "T002" in p2 and ">2</td>" in p2  # ลำดับต่อจากหน้าก่อน
+    found = admin.get(f"/owners/{oid}?tab=s11&q=ผู้เสียหาย ข").get_data(as_text=True)
+    assert "T002" in found and "T001" not in found and "พบ 1 รายการ" in found

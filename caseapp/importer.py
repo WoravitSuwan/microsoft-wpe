@@ -87,8 +87,12 @@ def detect_kind(wb):
 
 
 def load(path_or_file):
+    """เปิดแบบ read-only (ใช้หน่วยความจำน้อย รองรับไฟล์ใหญ่บน serverless)"""
     try:
-        return openpyxl.load_workbook(path_or_file, data_only=True)
+        wb = openpyxl.load_workbook(path_or_file, data_only=True, read_only=True)
+        for ws in wb.worksheets:
+            ws.reset_dimensions()  # บางระบบ export ขนาดชีตผิด: อ่านทุกแถวจริง
+        return wb
     except Exception as exc:  # noqa: BLE001
         raise ImportError_(f"เปิดไฟล์ Excel ไม่ได้: {exc}") from exc
 

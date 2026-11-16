@@ -82,6 +82,17 @@ CREATE TABLE IF NOT EXISTS imports (
     filename TEXT, kind TEXT, user_id INTEGER, summary TEXT,
     created_at TEXT DEFAULT {NOW}
 );
+
+-- ไฟล์ที่อัปโหลดเป็นส่วน ๆ (Vercel รับคำขอได้ไม่เกิน 4.5 MB) ลบทิ้งหลังนำเข้า
+CREATE TABLE IF NOT EXISTS uploads (
+    id INTEGER PRIMARY KEY,
+    token TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    data BLOB NOT NULL,
+    created_at TEXT DEFAULT {NOW},
+    UNIQUE (token, seq)
+);
 """
 
 TPO_FIELDS = [
@@ -218,6 +229,7 @@ def init_db(app):
         if isinstance(db, PgConnection):
             schema = (SCHEMA.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
                       .replace(" REAL", " DOUBLE PRECISION")
+                      .replace(" BLOB", " BYTEA")
                       .replace("{NOW}", "(to_char(now() AT TIME ZONE 'Asia/Bangkok', "
                                         "'YYYY-MM-DD HH24:MI:SS'))"))
             db.execute("SELECT pg_advisory_xact_lock(4815162342)")  # กันหลาย instance สร้างพร้อมกัน
