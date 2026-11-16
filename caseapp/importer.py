@@ -131,11 +131,25 @@ def read_tpo_rows(wb):
     raise ImportError_("ไม่พบหัวตาราง 'เลขรับแจ้ง' / 'พนักงานสอบสวน' ในไฟล์")
 
 
-def import_tpo(db, wb, *, owner_id=None, allow_move=True):
+NO_INVESTIGATOR = "(ไม่ระบุพนักงานสอบสวน)"
+
+
+def investigator_of(rec):
+    return " ".join(str(rec.get("system_investigator") or "").split()) or NO_INVESTIGATOR
+
+
+def tpo_investigators(wb):
+    """รายชื่อพนักงานสอบสวนในไฟล์ thaipoliceonline พร้อมจำนวนคดี (มากไปน้อย)"""
+    return Counter(investigator_of(rec) for rec in read_tpo_rows(wb)).most_common()
+
+
+def import_tpo(db, wb, *, owner_id=None, allow_move=True, only=None):
     """owner_id=None: แยกเจ้าของตามคอลัมน์พนักงานสอบสวน, ไม่ใช่ None: เข้าเจ้าของนี้ทั้งหมด
 
     allow_move=False: ไม่ย้าย Case ID ที่เป็นของเจ้าของอื่นอยู่แล้ว (ใช้กับผู้ใช้ทั่วไป)
+    only: ชุดชื่อพนักงานสอบสวน ถ้ากำหนด จะนำเข้าเฉพาะแถวของคนเหล่านี้ (แถวอื่นข้าม)
     """
+    skipped = 0
     stats = Counter()
     per_owner = Counter()
     owners_new = []
@@ -143,6 +157,9 @@ def import_tpo(db, wb, *, owner_id=None, allow_move=True):
     units = {}
     cache = CaseCache(db)
     for rec in read_tpo_rows(wb):
+        if only is not None and investigator_of(rec) not in only:
+            skipped += 1
+            continue
         fields = {}
         for k, v in rec.items():
             if k == "case_id":
@@ -155,7 +172,7 @@ def import_tpo(db, wb, *, owner_id=None, allow_move=True):
                 fields[k] = _s(v)
         case_id = _s(rec["case_id"])
         if owner_id is None:
-            name = fields.get("system_investigator") or "(ไม่ระบุพนักงานสอบสวน)"
+            name = investigator_of(rec)
             if name not in owner_cache:
                 owner_cache[name], created = get_or_create_owner(db, name)
                 if created:
@@ -182,7 +199,7 @@ def import_tpo(db, wb, *, owner_id=None, allow_move=True):
         pos = re.sub(r"\s*บช\.สอท\.?$", "", unit).strip()
         db.execute("UPDATE owners SET position = ? WHERE id = ? AND (position IS NULL OR position = '')",
                    (pos, oid))
-    return {"rows": sum(stats.values()), "created": stats["created"],
+    return {"rows": sum(stats.values()), "skipped": skipped, "created": stats["created"],
             "updated": stats["updated"], "locked": stats["locked"],
             "owners_new": owners_new, "per_owner": dict(per_owner)}
 

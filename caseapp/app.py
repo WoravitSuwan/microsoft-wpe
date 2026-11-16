@@ -434,7 +434,7 @@ def _register(app):
         owner_or_404(int(mode))
         return int(mode)
 
-    def _run_import(stream, filename, owner_id):
+    def _run_import(stream, filename, owner_id, only=None):
         """นำเข้าไฟล์ แล้วคืนเลขที่ประวัติการนำเข้า (ImportError_ ถ้าไฟล์ไม่ถูกต้อง)"""
         db = get_db()
         is_admin = g.user["role"] == "admin"
@@ -443,7 +443,8 @@ def _register(app):
             kind = importer.detect_kind(wb)
             if kind == "tpo":
                 with batch(db):
-                    res = importer.import_tpo(db, wb, owner_id=owner_id, allow_move=is_admin)
+                    res = importer.import_tpo(db, wb, owner_id=owner_id, allow_move=is_admin,
+                                              only=only)
                 m = re.search(r"(20\d{2})(\d{2})(\d{2})", filename)
                 tpo_date = (f"{m[1]}-{m[2]}-{m[3]}" if m else date.today().isoformat())
                 for oid in res["per_owner"]:
@@ -459,7 +460,8 @@ def _register(app):
                     "ไม่รู้จักรูปแบบไฟล์ ต้องเป็นไฟล์ export thaipoliceonline (มีคอลัมน์ 'เลขรับแจ้ง' และ "
                     "'พนักงานสอบสวน') หรือไฟล์รายงานเอกสารแนบ — พบ " + importer.first_row_text(wb))
             names = {o["id"]: o["name"] for o in db.execute("SELECT id, name FROM owners")}
-            summary = {"kind": label, "rows": res["rows"], "created": res["created"],
+            summary = {"kind": label, "rows": res["rows"], "skipped": res.get("skipped", 0),
+                       "created": res["created"],
                        "updated": res["updated"], "locked": res["locked"],
                        "owners": {names[k]: v for k, v in res["per_owner"].items()}}
             cur = db.execute("INSERT INTO imports (filename, kind, user_id, summary) "
@@ -491,7 +493,8 @@ def _register(app):
                 return redirect(url_for("import_view"))
             return redirect(url_for("import_result", import_id=import_id))
         owners = db.execute("SELECT id, name FROM owners ORDER BY name").fetchall()
-        return render_template("import.html", owners=owners, is_admin=is_admin,
+        mine = next((o["name"] for o in owners if o["id"] == g.user["owner_id"]), "")
+        return render_template("import.html", owners=owners, is_admin=is_admin, my_name=mine,
                                chunk_size=UPLOAD_CHUNK, max_size=UPLOAD_MAX)
 
     @app.route("/import/chunk", methods=["POST"])
@@ -520,29 +523,68 @@ def _register(app):
             return {"error": f"บันทึกส่วนของไฟล์ไม่สำเร็จ ({type(exc).__name__}: {str(exc)[:300]})"}, 500
         return {"ok": True}
 
-    @app.route("/import/finish", methods=["POST"])
-    @login_required
-    def import_finish():
-        """รวมส่วนของไฟล์แล้วนำเข้า คืน JSON {url} หรือ {error}"""
+    def _uploaded_file(delete):
+        """รวมส่วนของไฟล์ที่อัปโหลด คืน bytes หรือ None ถ้าไม่ครบ"""
         db = get_db()
-        if g.user["role"] != "admin" and not g.user["owner_id"]:
-            return {"error": "บัญชีนี้ยังไม่ได้ผูกกับเจ้าของข้อมูล"}, 403
         token = request.form.get("token", "")
         total = _int(request.form.get("chunks")) or 0
         rows = db.execute("SELECT seq, data FROM uploads WHERE token = ? AND user_id = ? "
                           "ORDER BY seq", (token, g.user["id"])).fetchall()
-        db.execute("DELETE FROM uploads WHERE token = ? AND user_id = ?", (token, g.user["id"]))
-        # ล้างส่วนที่ค้างจากการอัปโหลดที่ไม่สำเร็จ (เก่ากว่า 1 วัน)
-        db.execute("DELETE FROM uploads WHERE created_at < ?",
-                   ((datetime.now(timezone.utc) + timedelta(hours=7) - timedelta(days=1))
-                    .strftime("%Y-%m-%d %H:%M:%S"),))
-        db.commit()
+        if delete:
+            db.execute("DELETE FROM uploads WHERE token = ? AND user_id = ?", (token, g.user["id"]))
+            # ล้างส่วนที่ค้างจากการอัปโหลดที่ไม่สำเร็จ (เก่ากว่า 1 วัน)
+            db.execute("DELETE FROM uploads WHERE created_at < ?",
+                       ((datetime.now(timezone.utc) + timedelta(hours=7) - timedelta(days=1))
+                        .strftime("%Y-%m-%d %H:%M:%S"),))
+            db.commit()
         if total < 1 or [r["seq"] for r in rows] != list(range(total)):
+            return None
+        return b"".join(bytes(r["data"]) for r in rows)
+
+    @app.route("/import/inspect", methods=["POST"])
+    @login_required
+    def import_inspect():
+        """อ่านไฟล์ที่อัปโหลดแล้ว บอกว่ามีพนักงานสอบสวนใครบ้าง ให้เลือกก่อนนำเข้า"""
+        data = _uploaded_file(delete=False)
+        if data is None:
             return {"error": "อัปโหลดไฟล์ไม่ครบ กรุณาลองใหม่"}, 400
-        data = b"".join(bytes(r["data"]) for r in rows)
+        try:
+            wb = importer.load(io.BytesIO(data))
+            kind = importer.detect_kind(wb)
+            if kind == "tpo":
+                existing = {o["name"] for o in get_db().execute("SELECT name FROM owners")}
+                people = [{"name": n, "rows": c, "exists": n in existing}
+                          for n, c in importer.tpo_investigators(wb)]
+                return {"kind": "tpo", "rows": sum(p["rows"] for p in people), "investigators": people}
+            if kind == "report":
+                return {"kind": "report"}
+            return {"error": "ไม่รู้จักรูปแบบไฟล์ ต้องเป็นไฟล์ export thaipoliceonline (มีคอลัมน์ "
+                             "'เลขรับแจ้ง' และ 'พนักงานสอบสวน') หรือไฟล์รายงานเอกสารแนบ — พบ "
+                             + importer.first_row_text(wb)}, 400
+        except importer.ImportError_ as exc:
+            return {"error": str(exc)}, 400
+        except Exception as exc:  # noqa: BLE001
+            app.logger.exception("inspect failed")
+            return {"error": f"อ่านไฟล์ไม่สำเร็จ ({type(exc).__name__}: {str(exc)[:300]})"}, 500
+
+    @app.route("/import/finish", methods=["POST"])
+    @login_required
+    def import_finish():
+        """รวมส่วนของไฟล์แล้วนำเข้า คืน JSON {url} หรือ {error}
+
+        names (ส่งได้หลายค่า): นำเข้าเฉพาะคดีของพนักงานสอบสวนเหล่านี้
+        """
+        if g.user["role"] != "admin" and not g.user["owner_id"]:
+            return {"error": "บัญชีนี้ยังไม่ได้ผูกกับเจ้าของข้อมูล"}, 403
+        names = [" ".join(n.split()) for n in request.form.getlist("names") if n.strip()]
+        if request.form.get("select") == "1" and not names:
+            return {"error": "กรุณาเลือกพนักงานสอบสวนอย่างน้อย 1 คน"}, 400
+        data = _uploaded_file(delete=True)
+        if data is None:
+            return {"error": "อัปโหลดไฟล์ไม่ครบ กรุณาลองใหม่"}, 400
         try:
             import_id = _run_import(io.BytesIO(data), request.form.get("filename", "upload.xlsx"),
-                                    _owner_mode())
+                                    _owner_mode(), only=set(names) if names else None)
         except importer.ImportError_ as exc:
             return {"error": str(exc)}, 400
         except Exception as exc:  # noqa: BLE001 - แจ้งสาเหตุให้ผู้ใช้เห็น และบันทึกใน log
@@ -630,6 +672,12 @@ def _register(app):
             db.execute("DELETE FROM owners WHERE id = ?", (oid,))
             db.commit()
             flash("ลบเจ้าของข้อมูลและคดีทั้งหมดของเจ้าของนี้แล้ว", "ok")
+        elif action == "delete_many":
+            ids = [i for i in (_int(x) for x in request.form.getlist("ids")) if i]
+            for oid in ids:
+                db.execute("DELETE FROM owners WHERE id = ?", (oid,))
+            db.commit()
+            flash(f"ลบเจ้าของข้อมูล {len(ids)} คน พร้อมคดีทั้งหมดของคนเหล่านั้นแล้ว", "ok")
         return redirect(url_for("index"))
 
     @app.errorhandler(403)
