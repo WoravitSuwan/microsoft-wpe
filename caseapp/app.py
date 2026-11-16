@@ -13,8 +13,8 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request, s
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from . import importer, report
-from .db import (MANUAL_FIELDS, CaseCache, batch, database_url, get_db, init_db,
-                 placeholder_case_id, upsert_case)
+from .db import (MANUAL_FIELDS, CaseCache, batch, database_url, find_owner, get_db,
+                 get_setting, init_db, placeholder_case_id, set_setting, upsert_case)
 from .thaidate import be_slash, ce_slash, thai_short, thai_short_time, to_iso
 
 
@@ -204,7 +204,62 @@ def _register(app):
                 return redirect(nxt if nxt.startswith("/") and not nxt.startswith("//")
                                 else url_for("index"))
             flash("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", "error")
-        return render_template("login.html")
+        return render_template("login.html",
+                               register_open=bool(get_setting(get_db(), "register_code")))
+
+    @app.route("/register", methods=["GET", "POST"])
+    def register():
+        """สมัครสมาชิกด้วยตัวเอง: 1 บัญชีต่อพนักงานสอบสวน 1 คน ต้องมีรหัสลงทะเบียนของหน่วย"""
+        db = get_db()
+        if g.user is not None:
+            return redirect(url_for("index"))
+        code = get_setting(db, "register_code") or ""
+        if not code:
+            return render_template("register.html", closed=True, form={})
+        form = {k: _form_text(k) or "" for k in ("username", "name", "position")}
+        if request.method == "POST":
+            name = " ".join(form["name"].split())
+            password = request.form.get("password", "")
+            error = None
+            if not secrets.compare_digest(request.form.get("code", "").strip(), code):
+                error = "รหัสลงทะเบียนไม่ถูกต้อง (ขอได้จากผู้ดูแลระบบของหน่วย)"
+            elif not re.fullmatch(r"[A-Za-z0-9_.@-]{3,40}", form["username"]):
+                error = "ชื่อผู้ใช้ต้องเป็นตัวอักษรภาษาอังกฤษ ตัวเลข หรือ . _ - @ ยาว 3–40 ตัว"
+            elif len(password) < 8:
+                error = "รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร"
+            elif password != request.form.get("password2", ""):
+                error = "ยืนยันรหัสผ่านไม่ตรงกัน"
+            elif len(name.split()) < 2:
+                error = "กรุณากรอก ยศ ชื่อ และนามสกุล ให้ตรงกับในระบบ thaipoliceonline"
+            elif db.execute("SELECT 1 FROM users WHERE username = ?", (form["username"],)).fetchone():
+                error = "ชื่อผู้ใช้นี้มีคนใช้แล้ว"
+            owner = find_owner(db, name) if not error else None
+            if owner is not None and db.execute("SELECT 1 FROM users WHERE owner_id = ?",
+                                                (owner["id"],)).fetchone():
+                error = (f"มีบัญชีของ {owner['name']} อยู่แล้ว ถ้าเป็นของคุณให้เข้าสู่ระบบ "
+                         "หรือติดต่อผู้ดูแลระบบเพื่อตั้งรหัสผ่านใหม่")
+            if error:
+                flash(error, "error")
+                return render_template("register.html", closed=False, form=form)
+            if owner is None:
+                owner_id = db.execute("INSERT INTO owners (name, position) VALUES (?, ?)",
+                                      (name, form["position"])).lastrowid
+            else:
+                owner_id = owner["id"]
+                if form["position"] and not owner["position"]:
+                    db.execute("UPDATE owners SET position = ? WHERE id = ?",
+                               (form["position"], owner_id))
+            uid = db.execute("INSERT INTO users (username, password_hash, display_name, role, owner_id) "
+                             "VALUES (?, ?, ?, 'officer', ?)",
+                             (form["username"], generate_password_hash(password), name,
+                              owner_id)).lastrowid
+            db.commit()
+            session.clear()
+            session["uid"] = uid
+            flash("สมัครสมาชิกเรียบร้อย ขั้นต่อไป: นำเข้าไฟล์ export จาก thaipoliceonline "
+                  "แล้วระบบจะเลือกคดีของคุณให้", "ok")
+            return redirect(url_for("import_view"))
+        return render_template("register.html", closed=False, form=form)
 
     @app.route("/logout", methods=["POST"])
     def logout():
@@ -291,7 +346,7 @@ def _register(app):
                   "as_of": to_iso(request.form.get("as_of")),
                   "tpo_date": to_iso(request.form.get("tpo_date")),
                   "notes": request.form.get("notes", "").strip()}
-        if g.user["role"] == "admin" and _form_text("name"):
+        if _form_text("name"):
             fields["name"] = _form_text("name")
         try:
             db.execute(f"UPDATE owners SET {', '.join(k + ' = ?' for k in fields)} WHERE id = ?",
@@ -635,6 +690,12 @@ def _register(app):
                         db.execute("UPDATE users SET password_hash = ? WHERE id = ?",
                                    (generate_password_hash(request.form["password"]), uid))
                     flash("บันทึกผู้ใช้แล้ว", "ok")
+                elif action == "registration":
+                    code = (request.form.get("code") or "").strip()
+                    if code and len(code) < 6:
+                        raise ValueError("รหัสลงทะเบียนต้องยาวอย่างน้อย 6 ตัวอักษร")
+                    set_setting(db, "register_code", code or None)
+                    flash("เปิดรับสมัครสมาชิกแล้ว" if code else "ปิดรับสมัครสมาชิกแล้ว", "ok")
                 elif action == "delete":
                     uid = int(request.form["id"])
                     if uid == g.user["id"]:
@@ -651,7 +712,9 @@ def _register(app):
         rows = db.execute("SELECT u.*, o.name AS owner_name FROM users u LEFT JOIN owners o "
                           "ON o.id = u.owner_id ORDER BY u.username").fetchall()
         owners = db.execute("SELECT id, name FROM owners ORDER BY name").fetchall()
-        return render_template("users.html", users=rows, owners=owners)
+        return render_template("users.html", users=rows, owners=owners,
+                               register_code=get_setting(db, "register_code") or "",
+                               suggest_code=secrets.token_hex(4))
 
     @app.route("/admin/owners", methods=["POST"])
     @admin_required

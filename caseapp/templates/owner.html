@@ -173,8 +173,8 @@
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <div class="grid">
       <div><label>ยศ ชื่อ สกุล (เจ้าของข้อมูล)</label>
-        <input type="text" name="name" value="{{ owner.name }}" {{ 'readonly' if g.user.role != 'admin' }}>
-        <div class="hint">ใช้ตั้งชื่อไฟล์: {{ report.export_filename(owner.name) }}</div></div>
+        <input type="text" name="name" value="{{ owner.name }}" required>
+        <div class="hint">ต้องตรงกับคอลัมน์ "พนักงานสอบสวน" ใน thaipoliceonline · ใช้ตั้งชื่อไฟล์: {{ report.export_filename(owner.name) }}</div></div>
       <div><label>ตำแหน่ง/สังกัด</label><input type="text" name="position" value="{{ owner.position or '' }}" placeholder="สว.(สอบสวน) กก.1 บก.สอท.4"></div>
       <div><label>ข้อมูล ณ วันที่</label><input type="date" name="as_of" value="{{ owner.as_of or '' }}">
         <div class="hint">เว้นว่าง = วันนี้ · ใช้นับอายุคดีข้อ 1.5</div></div>

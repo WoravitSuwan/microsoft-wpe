@@ -20,7 +20,8 @@
     </select>
     <span class="hint">เลือกเจ้าของคนเดียวเมื่อคดีในไฟล์ยังระบุพนักงานสอบสวนคนเดิม แต่โอนมาอยู่ในความรับผิดชอบของคนใหม่แล้ว</span></p>
   {% else %}
-  <p class="hint">คดีที่เลือกนำเข้าจะเป็นของคุณ ({{ my_name }})</p>
+  <p class="hint">ใช้ไฟล์ export ของ thaipoliceonline ได้ทั้งไฟล์ของตัวเองหรือไฟล์รวมของกอง — ระบบจะติ๊กคดีของ <b>{{ my_name }}</b> ไว้ให้
+    และคดีที่เลือกทั้งหมดจะเป็นของคุณ (คดีที่มีเจ้าของคนอื่นในระบบแล้วจะถูกข้าม)</p>
   {% endif %}
   <p class="hint">หลังอัปโหลด ระบบจะแสดงรายชื่อพนักงานสอบสวนในไฟล์ ให้เลือกเฉพาะคนที่ต้องการนำเข้า</p>
   <div class="row" id="import-actions">
@@ -99,14 +100,20 @@
     goBtn.textContent = 'นำเข้าคดีของคนที่เลือก (' + checked().length + ' คน, ' + n.toLocaleString() + ' คดี)';
     goBtn.disabled = checked().length === 0;
   }
+  function key(n) { return String(n || '').replace(/\s+/g, ''); }
   function showPick(info) {
     list.textContent = '';
+    if (MY_NAME) {  // ชื่อตัวเองขึ้นก่อน
+      info.investigators.sort(function (a, b) {
+        return (key(b.name) === key(MY_NAME)) - (key(a.name) === key(MY_NAME));
+      });
+    }
     info.investigators.forEach(function (p) {
       var lab = document.createElement('label');
       lab.style.cssText = 'display:flex;gap:8px;align-items:center;font-weight:400;padding:4px 0';
       var cb = document.createElement('input');
       cb.type = 'checkbox'; cb.value = p.name; cb.dataset.rows = p.rows;
-      cb.checked = !!MY_NAME && p.name === MY_NAME;
+      cb.checked = !!MY_NAME && key(p.name) === key(MY_NAME);
       cb.addEventListener('change', updateCount);
       var name = document.createElement('span'); name.textContent = p.name; name.style.flex = '1';
       var n = document.createElement('span'); n.className = 'badge'; n.textContent = p.rows.toLocaleString() + ' คดี';
@@ -119,7 +126,8 @@
     });
     say(document.getElementById('pick-summary'), 'ไฟล์ ' + upload.filename + ' มี ' + info.rows.toLocaleString() +
         ' คดี จากพนักงานสอบสวน ' + info.investigators.length + ' คน — คนที่ไม่ได้เลือกจะไม่ถูกนำเข้า');
-    say(pickStatus, '');
+    var mine = MY_NAME && info.investigators.some(function (p) { return key(p.name) === key(MY_NAME); });
+    say(pickStatus, MY_NAME && !mine ? 'ไม่พบชื่อ "' + MY_NAME + '" ในไฟล์นี้ — ตรวจว่าชื่อในหน้าตั้งค่ารายงานตรงกับคอลัมน์พนักงานสอบสวน' : '', MY_NAME && !mine);
     updateCount();
     pick.hidden = false;
     document.getElementById('import-actions').hidden = true;
@@ -180,7 +188,9 @@
       var res = await fetch('{{ url_for("import_inspect") }}', {method: 'POST', body: fd, credentials: 'same-origin'});
       if (!res.ok) return fail(await errorOf(res));
       var info = await res.json();
-      if (info.kind === 'tpo' && info.investigators.length > 1) { say(status, ''); return showPick(info); }
+      var onlyMine = info.kind === 'tpo' && info.investigators.length === 1 &&
+                     (!MY_NAME || key(info.investigators[0].name) === key(MY_NAME));
+      if (info.kind === 'tpo' && !onlyMine) { say(status, ''); return showPick(info); }
       // ไฟล์รายงานเดิม หรือมีพนักงานสอบสวนคนเดียว: นำเข้าเลย
       var names = info.kind === 'tpo' ? info.investigators.map(function (p) { return p.name; }) : null;
       if (!await finish(names, status)) btn.disabled = false;

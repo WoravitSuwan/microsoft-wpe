@@ -431,3 +431,73 @@ def test_delete_many_owners(app, admin):
                    follow_redirects=True)
     assert "ลบเจ้าของข้อมูล 2 คน" in r.get_data(as_text=True)
     assert owner_ids(app) == {}
+
+
+def register(client, name, username, code="unit-code-1", password="password1"):
+    return client.post("/register", data={"name": name, "username": username, "password": password,
+                                         "password2": password, "code": code,
+                                         "position": "สว.(สอบสวน) กก.9"})
+
+
+def test_self_registration_flow(app, admin):
+    anon = app.test_client()
+    assert "ปิดรับสมัคร" in anon.get("/register").get_data(as_text=True)
+    assert "สมัครสมาชิก" not in anon.get("/login").get_data(as_text=True)
+    admin.post("/admin/users", data={"action": "registration", "code": "unit-code-1"})
+    assert "สมัครสมาชิก" in anon.get("/login").get_data(as_text=True)
+    # รหัสลงทะเบียนผิด
+    r = register(anon, A, "officer_a", code="wrong")
+    assert "รหัสลงทะเบียนไม่ถูกต้อง" in r.get_data(as_text=True)
+    # สมัครสำเร็จ: เข้าสู่ระบบทันที และไปหน้านำเข้า
+    r = register(anon, A, "officer_a")
+    assert r.status_code == 302 and r.headers["Location"].endswith("/import")
+    assert A in anon.get("/import").get_data(as_text=True)
+    # ชื่อเดียวกัน (เว้นวรรคต่างกัน) สมัครซ้ำไม่ได้
+    other = app.test_client()
+    r = register(other, A.replace(".", ". ", 1), "officer_a2")
+    assert "มีบัญชีของ" in r.get_data(as_text=True)
+    # ชื่อผู้ใช้ซ้ำไม่ได้
+    assert "มีคนใช้แล้ว" in register(other, B, "officer_a").get_data(as_text=True)
+    # ปิดรับสมัคร
+    admin.post("/admin/users", data={"action": "registration", "code": ""})
+    assert "ปิดรับสมัคร" in other.get("/register").get_data(as_text=True)
+
+
+def test_officers_import_unit_file_each_get_own_cases(app, admin):
+    """ไฟล์รวมของกอง: แต่ละคนสมัครเอง นำเข้าไฟล์เดียวกัน แล้วได้เฉพาะคดีของตัวเอง"""
+    admin.post("/admin/users", data={"action": "registration", "code": "unit-code-1"})
+    a, b = app.test_client(), app.test_client()
+    register(a, A, "officer_a")
+    register(b, " ".join(B.split()).replace(".", ". ", 1), "officer_b")  # เว้นวรรคต่างจากในไฟล์
+    data = tpo_file(ROWS).getvalue()
+    for client, name in ((a, A), (b, B)):
+        up = upload_parts(client, data)
+        info = client.post("/import/inspect", data=up).get_json()
+        assert {p["name"] for p in info["investigators"]} == {A, B}
+        r = client.post("/import/finish", data={**up, "select": "1", "names": [name]})
+        assert r.status_code == 200, r.get_data(as_text=True)
+    ids = owner_ids(app)
+    assert len(ids) == 2  # ไม่มีเจ้าของซ้ำจากการเว้นวรรคต่างกัน
+    from caseapp.db import get_db
+    with app.app_context():
+        rows = get_db().execute("SELECT c.case_id, u.username FROM cases c JOIN users u "
+                                "ON u.owner_id = c.owner_id ORDER BY c.case_id").fetchall()
+    assert [(r["case_id"], r["username"]) for r in rows] == [
+        ("T001", "officer_a"), ("T002", "officer_a"), ("T003", "officer_b")]
+    # เห็นเฉพาะของตัวเอง
+    a_owner = [i for n, i in ids.items() if n == A][0]
+    b_owner = [i for n, i in ids.items() if n != A][0]
+    assert a.get(f"/owners/{b_owner}").status_code == 403
+    assert b.get(f"/owners/{a_owner}").status_code == 403
+    # รายงานของ B ไม่มีหมายเหตุ "ระบบยังระบุคนอื่น" เพราะชื่อเทียบแบบไม่สนช่องว่าง
+    notes = " ".join(str(c.value) for c in export(b, b_owner)["สรุป"]["A"] if c.value)
+    assert "รายการที่ระบบยังระบุ" not in notes
+
+
+def test_registration_links_existing_unclaimed_owner(app, admin):
+    do_import(admin, tpo_file(ROWS))  # ผู้ดูแลนำเข้าไว้ก่อน (ยังไม่มีบัญชี)
+    admin.post("/admin/users", data={"action": "registration", "code": "unit-code-1"})
+    c = app.test_client()
+    register(c, A, "officer_a")
+    assert c.get("/").headers["Location"].endswith(f"/owners/{owner_ids(app)[A]}")
+    assert len(owner_ids(app)) == 2
