@@ -54,7 +54,7 @@
 <div class="tbl-wrap"><table class="data">
   <thead><tr><th>เวลา</th><th>ไฟล์</th><th>ประเภท</th><th>ผู้นำเข้า</th><th>ผลลัพธ์</th></tr></thead>
   <tbody>{% for i in imports %}{% set s = loads(i.summary) %}
-    <tr><td class="nowrap">{{ i.created_at }}</td><td>{{ i.filename }}</td><td>{{ s.kind }}</td><td>{{ i.username }}</td>
+    <tr><td class="nowrap">{{ (i.created_at or "")[:16] }}</td><td>{{ i.filename }}</td><td>{{ s.kind }}</td><td>{{ i.username }}</td>
       <td>{{ s.rows }} แถว · ใหม่ {{ s.created }} · อัปเดต {{ s.updated }}{% if s.locked %} · ข้าม {{ s.locked }}{% endif %}
         — {% for n, c in s.owners.items() %}{{ n }} ({{ c }}){% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
   {% endfor %}</tbody>

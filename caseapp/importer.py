@@ -10,7 +10,7 @@ from collections import Counter
 
 import openpyxl
 
-from .db import get_or_create_owner, placeholder_case_id, upsert_case
+from .db import CaseCache, get_or_create_owner, placeholder_case_id, upsert_case
 from .thaidate import to_iso
 
 INVESTIGATING = "ระหว่างสอบสวน"
@@ -118,7 +118,9 @@ def import_tpo(db, wb, *, owner_id=None, allow_move=True):
     stats = Counter()
     per_owner = Counter()
     owners_new = []
+    owner_cache = {}
     units = {}
+    cache = CaseCache(db)
     for rec in read_tpo_rows(wb):
         fields = {}
         for k, v in rec.items():
@@ -133,16 +135,18 @@ def import_tpo(db, wb, *, owner_id=None, allow_move=True):
         case_id = _s(rec["case_id"])
         if owner_id is None:
             name = fields.get("system_investigator") or "(ไม่ระบุพนักงานสอบสวน)"
-            oid, created = get_or_create_owner(db, name)
-            if created:
-                owners_new.append(name)
+            if name not in owner_cache:
+                owner_cache[name], created = get_or_create_owner(db, name)
+                if created:
+                    owners_new.append(name)
+            oid = owner_cache[name]
             if fields.get("unit"):
                 units.setdefault(oid, fields["unit"])
             target, force = oid, False
         else:
             target, force = owner_id, allow_move
         result = upsert_case(db, target, case_id, fields, in_tpo=True, force_owner=force,
-                             allow_move=allow_move)
+                             allow_move=allow_move, cache=cache)
         stats[result] += 1
         per_owner[target] += 1
         # เลขคดีอาญาจาก thaipoliceonline ใช้เป็นค่าเริ่มต้นของข้อ 1.3 ถ้ายังไม่มีข้อมูลระบบ C.
@@ -202,6 +206,8 @@ def import_report(db, wb, *, owner_id=None, allow_move=True):
         as_of = to_iso(m[1])
     stats = Counter()
 
+    cache = CaseCache(db)
+
     def put(case_id, fields, in_tpo=None, criminal_no=None):
         """คืน Case ID ที่ใช้จริง (คดีที่ไม่มี Case ID ใช้รหัสภายในจากเลขคดีอาญา)"""
         case_id = _s(case_id)
@@ -211,7 +217,7 @@ def import_report(db, wb, *, owner_id=None, allow_move=True):
             case_id = placeholder_case_id(criminal_no)
             fields = {**fields, "no_case_id": 1}
         res = upsert_case(db, owner_id, case_id, fields, in_tpo=in_tpo, force_owner=allow_move,
-                          allow_move=allow_move)
+                          allow_move=allow_move, cache=cache)
         stats[res] += 1
         return None if res == "locked" else case_id
 
@@ -220,8 +226,8 @@ def import_report(db, wb, *, owner_id=None, allow_move=True):
                    "damage": _num(r[5]), "tpo_criminal_no": _s(r[6]),
                    "system_investigator": _s(r[7]), "status": _s(r[8])}, in_tpo=True)
     for r in _rows(_sheet(wb, "1.2"), 5):
-        exists = db.execute("SELECT 1 FROM cases WHERE case_id = ? AND owner_id = ?",
-                            (_s(r[1]), owner_id)).fetchone()
+        known = cache.get(_s(r[1]))
+        exists = known is not None and known["owner_id"] == owner_id
         # ชื่อ/สถานะใช้จากข้อ 1.1 ถ้ามีอยู่แล้ว
         put(r[1], {"statement_taken": 1} if exists else
             {"statement_taken": 1, "victim": _s(r[2]), "status": _s(r[3])})

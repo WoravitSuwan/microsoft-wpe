@@ -1,6 +1,8 @@
 """ทดสอบด้วยข้อมูลสมมติ (ห้ามใส่ข้อมูลคดีจริงใน repo)"""
 import io
+import os
 import re
+import uuid
 
 import openpyxl
 import pytest
@@ -41,10 +43,46 @@ ROWS = [
 ]
 
 
+PG_URL = os.environ.get("TEST_DATABASE_URL")  # เช่น postgresql://postgres@127.0.0.1:5433/postgres
+BACKENDS = ["sqlite"] + (["postgres"] if PG_URL else [])
+
+
+@pytest.fixture(params=BACKENDS)
+def backend(request):
+    return request.param
+
+
 @pytest.fixture()
-def app(tmp_path):
-    return create_app({"DATABASE": str(tmp_path / "t.db"), "TESTING": True,
-                       "TESTING_NO_CSRF": True})
+def make_app(tmp_path, backend):
+    """สร้างแอปที่มีฐานข้อมูลว่างของตัวเอง (Postgres ใช้ schema แยกต่อการทดสอบ)"""
+    schemas = []
+
+    def make(name="t", **extra):
+        cfg = {"TESTING": True, "TESTING_NO_CSRF": True, "SECRET_KEY": "test", **extra}
+        if backend == "postgres":
+            import psycopg
+            schema = f"t_{uuid.uuid4().hex[:12]}"
+            with psycopg.connect(PG_URL, autocommit=True) as conn:
+                conn.execute(f"CREATE SCHEMA {schema}")
+            schemas.append(schema)
+            sep = "&" if "?" in PG_URL else "?"
+            cfg["DATABASE_URL"] = f"{PG_URL}{sep}options=-csearch_path%3D{schema}"
+        else:
+            cfg["DATABASE"] = str(tmp_path / f"{name}.db")
+            cfg["DATABASE_URL"] = None
+        return create_app(cfg)
+
+    yield make
+    if schemas:
+        import psycopg
+        with psycopg.connect(PG_URL, autocommit=True) as conn:
+            for schema in schemas:
+                conn.execute(f"DROP SCHEMA {schema} CASCADE")
+
+
+@pytest.fixture()
+def app(make_app):
+    return make_app()
 
 
 @pytest.fixture()
@@ -149,7 +187,7 @@ def test_criminal_backlog_and_c_update(app, admin):
     assert wb["1.1 Case ID ทั้งหมด"]["A2"].value == "ข้อมูล ณ วันที่ 16 พ.ย. 2569 · พ.ต.ต.ทดสอบ หนึ่ง สว.(สอบสวน) กก.9"
 
 
-def test_report_roundtrip(app, admin, tmp_path):
+def test_report_roundtrip(app, admin, make_app):
     """ไฟล์ที่ export ออกไป นำเข้ากลับ (เป็นรายงานเดิม) แล้ว export ซ้ำได้ค่าเท่าเดิม"""
     do_import(admin, tpo_file(ROWS))
     oid = owner_ids(app)[A]
@@ -158,7 +196,7 @@ def test_report_roundtrip(app, admin, tmp_path):
     admin.post(f"/owners/{oid}/settings", data={"position": "", "as_of": "2026-11-16", "tpo_date": "", "notes": "หมายเหตุพิเศษ"})
     first = admin.get(f"/owners/{oid}/export").data
 
-    app2 = create_app({"DATABASE": str(tmp_path / "t2.db"), "TESTING": True, "TESTING_NO_CSRF": True})
+    app2 = make_app("t2")
     c2 = app2.test_client()
     c2.post("/setup", data={"username": "admin", "password": "secret1"})
     do_import(c2, io.BytesIO(first), name="เอกสารแนบ.xlsx")
@@ -197,7 +235,7 @@ def test_officer_sees_only_own_data(app, admin):
     off.post(f"/owners/{ids[A]}/bulk", data={"kind": "s12", "data": "T003"})
     with app.app_context():
         row = get_db().execute("SELECT owner_id, statement_taken FROM cases WHERE case_id = 'T003'").fetchone()
-    assert tuple(row) == (ids[B], 0)
+    assert (row["owner_id"], row["statement_taken"]) == (ids[B], 0)
 
 
 def test_admin_reassign_owner_is_sticky(app, admin):
@@ -215,7 +253,26 @@ def test_admin_reassign_owner_is_sticky(app, admin):
     assert re.search(r"1 รายการที่ระบบยังระบุ " + re.escape(B), notes)
 
 
-def test_csrf_enforced(tmp_path):
-    app = create_app({"DATABASE": str(tmp_path / "c.db"), "TESTING": True})
+def test_csrf_enforced(make_app):
+    app = make_app("c", TESTING_NO_CSRF=False)
     c = app.test_client()
     assert c.post("/setup", data={"username": "x", "password": "secret1"}).status_code == 400
+
+
+def test_duplicate_owner_name_recovers(app, admin):
+    """ชื่อซ้ำต้องไม่ทำให้ transaction ค้าง (สำคัญกับ Postgres)"""
+    admin.post("/admin/owners", data={"action": "create", "name": A})
+    r = admin.post("/admin/owners", data={"action": "create", "name": A})
+    assert r.status_code == 302
+    assert admin.get("/").status_code == 200
+    assert list(owner_ids(app)) == [A]
+
+
+def test_vercel_requires_env(monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "ON_VERCEL", True)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    with pytest.raises(mod.ConfigError):
+        mod.create_app()
