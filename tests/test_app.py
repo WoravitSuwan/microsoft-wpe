@@ -356,3 +356,25 @@ def test_owner_table_pagination_and_search(app, admin, monkeypatch):
     assert "T002" in p2 and ">2</td>" in p2  # ลำดับต่อจากหน้าก่อน
     found = admin.get(f"/owners/{oid}?tab=s11&q=ผู้เสียหาย ข").get_data(as_text=True)
     assert "T002" in found and "T001" not in found and "พบ 1 รายการ" in found
+
+
+def test_import_error_messages(app, admin, monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
+    # ไฟล์ .xls รุ่นเก่า / ไม่ใช่ zip
+    r = chunked_import(admin, b"\xd0\xcf\x11\xe0 old xls", 1024)
+    assert r.status_code == 400 and "Save As" in r.get_json()["error"]
+    # xlsx แต่หัวตารางไม่ตรง: บอกหัวตารางที่พบ
+    wb = openpyxl.Workbook()
+    wb.active.append(["ชื่อ", "เบอร์โทร"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    r = chunked_import(admin, buf.getvalue(), 1024, token="cd" * 16)
+    err = r.get_json()["error"]
+    assert r.status_code == 400 and "ไม่รู้จักรูปแบบไฟล์" in err and "ชื่อ, เบอร์โทร" in err
+    # session หมดอายุ: endpoint นำเข้าตอบ JSON ไม่ใช่ redirect ไปหน้า login
+    anon = app.test_client()
+    r = anon.post("/import/finish", data={"token": "ab" * 16, "chunks": 1})
+    assert r.status_code == 401 and "เข้าสู่ระบบ" in r.get_json()["error"]
+    # หน้า HTML ไม่ถูก cache
+    assert admin.get("/import").headers["Cache-Control"] == "no-store"

@@ -36,6 +36,18 @@
   var csrf = form.querySelector('input[name=csrf]').value;
   var status = document.getElementById('import-status');
   var btn = document.getElementById('import-btn');
+  // ข้อความเมื่อ Vercel/เซิร์ฟเวอร์ตอบกลับเป็นหน้า error (ไม่ใช่ JSON)
+  function statusText(code) {
+    if (code === 413) return 'ข้อมูลที่ส่งใหญ่เกินที่ Vercel รับได้ (413)';
+    if (code === 504) return 'ใช้เวลานำเข้านานเกินกำหนดของ Vercel (504 timeout) — ลองแบ่งไฟล์เป็นหลายไฟล์';
+    if (code === 401 || code === 403) return 'หมดเวลาเข้าสู่ระบบหรือไม่มีสิทธิ์ (' + code + ') กรุณาเข้าสู่ระบบใหม่';
+    if (code === 400) return 'คำขอไม่ถูกต้อง (400) กรุณาโหลดหน้านี้ใหม่แล้วลองอีกครั้ง';
+    return 'เซิร์ฟเวอร์ตอบกลับผิดพลาด (' + code + ')';
+  }
+  async function errorOf(res) {
+    try { var j = await res.clone().json(); if (j && j.error) return j.error; } catch (_) {}
+    return statusText(res.status);
+  }
   function fail(msg) {
     status.textContent = msg; status.style.color = 'var(--err)';
     btn.disabled = false;
@@ -45,6 +57,7 @@
     if (!file) return;
     e.preventDefault();
     if (file.size > MAX) return fail('ไฟล์ใหญ่เกิน ' + Math.round(MAX / 1048576) + ' MB');
+    if (!/\.xlsx$/i.test(file.name)) return fail('รองรับเฉพาะไฟล์ .xlsx — ถ้าเป็น .xls หรือ .csv ให้เปิดใน Excel แล้ว Save As เป็น "Excel Workbook (.xlsx)"');
     btn.disabled = true; status.style.color = '';
     var token = Array.from(crypto.getRandomValues(new Uint8Array(16)),
                            function (b) { return b.toString(16).padStart(2, '0'); }).join('');
@@ -58,7 +71,7 @@
                     'Content-Type': 'application/octet-stream'},
           body: file.slice(i * CHUNK, (i + 1) * CHUNK)
         });
-        if (!r.ok) throw new Error('อัปโหลดไม่สำเร็จ (' + r.status + ')');
+        if (!r.ok) throw new Error('อัปโหลดส่วนที่ ' + (i + 1) + '/' + chunks + ' ไม่สำเร็จ: ' + await errorOf(r));
       }
       status.textContent = 'กำลังนำเข้าข้อมูล… (ไฟล์ใหญ่อาจใช้เวลาสักครู่)';
       var fd = new FormData();
@@ -68,11 +81,11 @@
       if (owner) fd.append('owner', owner.value);
       var res = await fetch('{{ url_for("import_finish") }}', {method: 'POST', body: fd, credentials: 'same-origin'});
       var out = {};
-      try { out = await res.json(); } catch (_) {}
+      try { out = await res.clone().json(); } catch (_) {}
       if (res.ok && out.url) { window.location = out.url; return; }
-      fail(out.error || ('นำเข้าไม่สำเร็จ (' + res.status + ')'));
+      fail(await errorOf(res));
     } catch (err) {
-      fail(err.message || 'เชื่อมต่อไม่สำเร็จ');
+      fail(err.message || 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ');
     }
   });
 })();

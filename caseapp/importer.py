@@ -8,7 +8,10 @@
 import re
 from collections import Counter
 
+import zipfile
+
 import openpyxl
+from openpyxl.utils.exceptions import InvalidFileException
 
 from .db import CaseCache, get_or_create_owner, placeholder_case_id, upsert_case
 from .thaidate import to_iso
@@ -86,6 +89,16 @@ def detect_kind(wb):
     return None
 
 
+def first_row_text(wb):
+    """ข้อความแถวแรกที่มีข้อมูล ใช้บอกผู้ใช้ว่าไฟล์มีหัวตารางอะไร"""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(max_row=10, values_only=True):
+            cells = [_h(c) for c in row if _h(c)]
+            if cells:
+                return f"ชีต '{ws.title}': " + ", ".join(cells[:8])
+    return "ไฟล์ว่าง"
+
+
 def load(path_or_file):
     """เปิดแบบ read-only (ใช้หน่วยความจำน้อย รองรับไฟล์ใหญ่บน serverless)"""
     try:
@@ -93,6 +106,10 @@ def load(path_or_file):
         for ws in wb.worksheets:
             ws.reset_dimensions()  # บางระบบ export ขนาดชีตผิด: อ่านทุกแถวจริง
         return wb
+    except (zipfile.BadZipFile, InvalidFileException, KeyError) as exc:
+        raise ImportError_(
+            "ไฟล์นี้ไม่ใช่ Excel แบบ .xlsx (อาจเป็น .xls รุ่นเก่า, .csv หรือไฟล์เว็บที่ตั้งชื่อเป็น .xls) "
+            "กรุณาเปิดไฟล์ใน Excel แล้ว Save As เป็น \"Excel Workbook (.xlsx)\" แล้วนำเข้าใหม่") from exc
     except Exception as exc:  # noqa: BLE001
         raise ImportError_(f"เปิดไฟล์ Excel ไม่ได้: {exc}") from exc
 
