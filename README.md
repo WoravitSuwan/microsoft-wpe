@@ -55,7 +55,7 @@ python -m caseapp
 ไฟล์บน Vercel เป็นแบบชั่วคราว จึงต้องเก็บข้อมูลในฐานข้อมูล **Postgres** (Neon) แทน SQLite
 โค้ดรองรับทั้งสองแบบ: ถ้ามี `DATABASE_URL` (หรือ `POSTGRES_URL`) จะใช้ Postgres อัตโนมัติ
 
-1. vercel.com → **Add New… → Project** → Import repo `microsoft-wpe` (Framework Preset: **Other**) → Deploy
+1. vercel.com → **Add New… → Project** → Import repo `microsoft-wpe` (Framework Preset: **Flask** — Vercel ตรวจพบให้เอง) → Deploy
    (ครั้งแรกจะเห็นหน้า "ตั้งค่าระบบยังไม่ครบ" เป็นปกติ)
 2. Project → **Storage** → Create Database → **Neon (Serverless Postgres)**
    - เลือก Region **Singapore (ap-southeast-1)** ให้ตรงกับฟังก์ชัน (`vercel.json` ตั้งไว้ที่ `sin1`)
@@ -95,7 +95,7 @@ caseapp/
   report.py     คำนวณข้อ 1.1–1.5 และสร้างไฟล์ Excel ตามแบบเอกสารแนบ
   thaidate.py   แปลงวันที่ ค.ศ./พ.ศ. รูปแบบไทย
   templates/    หน้าเว็บ (ภาษาไทย)
-api/index.py    จุดเริ่มต้นบน Vercel
-vercel.json     ตั้งค่า Vercel (region sin1, เส้นทางทั้งหมดไปที่ Flask)
+app.py          จุดเริ่มต้นบน Vercel (ตัวแปร app)
+vercel.json     ตั้งค่า Vercel (region sin1)
 tests/          ทดสอบด้วยข้อมูลสมมติ
 ```
