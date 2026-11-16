@@ -501,3 +501,43 @@ def test_registration_links_existing_unclaimed_owner(app, admin):
     register(c, A, "officer_a")
     assert c.get("/").headers["Location"].endswith(f"/owners/{owner_ids(app)[A]}")
     assert len(owner_ids(app)) == 2
+
+
+def test_officer_deletes_only_own_data(app, admin):
+    do_import(admin, tpo_file(ROWS))
+    ids = owner_ids(app)
+    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
+                                     "role": "officer", "owner_id": ids[A]})
+    off = app.test_client()
+    off.post("/login", data={"username": "a", "password": "secret1"})
+    from caseapp.db import get_db
+
+    def count(oid):
+        with app.app_context():
+            return get_db().execute("SELECT COUNT(*) FROM cases WHERE owner_id = ?", (oid,)).fetchone()[0]
+    # รหัสผ่านผิด: ไม่ลบ
+    r = off.post(f"/owners/{ids[A]}/purge", data={"password": "wrong"}, follow_redirects=True)
+    assert "รหัสผ่านไม่ถูกต้อง" in r.get_data(as_text=True) and count(ids[A]) == 2
+    # ลบของคนอื่นไม่ได้
+    assert off.post(f"/owners/{ids[B]}/purge", data={"password": "secret1"}).status_code == 403
+    # ลบของตัวเอง: เหลือของคนอื่นครบ
+    r = off.post(f"/owners/{ids[A]}/purge", data={"password": "secret1"}, follow_redirects=True)
+    assert "ลบข้อมูลคดีทั้งหมดของ" in r.get_data(as_text=True)
+    assert count(ids[A]) == 0 and count(ids[B]) == 1
+    # ลบบัญชีด้วย: ออกจากระบบ และบัญชี/เจ้าของหายไป
+    r = off.post(f"/owners/{ids[A]}/purge", data={"password": "secret1", "delete_account": "1"})
+    assert r.status_code == 302 and "/login" in r.headers["Location"]
+    assert off.get("/").status_code == 302
+    assert A not in owner_ids(app) and B in owner_ids(app)
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM users WHERE username = 'a'").fetchone()[0] == 0
+
+
+def test_admin_purges_someones_cases_keeps_account(app, admin):
+    do_import(admin, tpo_file(ROWS))
+    ids = owner_ids(app)
+    r = admin.post(f"/owners/{ids[B]}/purge", data={"password": "secret1", "delete_account": "1"})
+    assert r.status_code == 302
+    assert B in owner_ids(app)  # ผู้ดูแลลบเฉพาะคดี ไม่ลบบัญชี/ตัวเอง
+    assert admin.get("/").status_code == 200
+    assert "ลบข้อมูล" in admin.get(f"/owners/{ids[B]}?tab=settings").get_data(as_text=True)

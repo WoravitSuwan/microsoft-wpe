@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import time
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from urllib.parse import quote
@@ -50,10 +51,19 @@ def create_app(test_config=None):
     app.config.update(test_config)
     init_db(app)
     app.jinja_env.filters.update(
+        initial=_initial,
         ce=ce_slash, be=be_slash, th=thai_short, thtime=thai_short_time,
         money=lambda v: "" if v in (None, "") else f"{float(v):,.2f}",
     )
-    app.jinja_env.globals.update(report=report)
+    app.jinja_env.globals.update(
+        report=report,
+        # ชื่อหน่วยที่แสดงบนเว็บ (เปลี่ยนได้ด้วย Environment Variables)
+        unit_short=os.environ.get("UNIT_SHORT", "กก.1 บก.สอท.4"),
+        unit_full=os.environ.get("UNIT_FULL", "กองกำกับการ 1 กองบังคับการตำรวจสืบสวนสอบสวน"
+                                              "อาชญากรรมทางเทคโนโลยี 4"),
+        # เปลี่ยนทุก deploy เพื่อไม่ให้เบราว์เซอร์ใช้ CSS/JS เก่า
+        asset_v=(os.environ.get("VERCEL_GIT_COMMIT_SHA") or str(int(time.time())))[:10],
+    )
     _register(app)
     return app
 
@@ -119,6 +129,22 @@ def _form_text(name):
     v = request.form.get(name, "")
     v = " ".join(v.split()) if "\n" not in v else v.strip()
     return v or None
+
+
+def _initial(name):
+    """อักษรย่อบนรูปโปรไฟล์: พยัญชนะแรกของชื่อจริง (ข้ามยศ/คำนำหน้า/สระหน้า)"""
+    parts = (name or "").split()
+    if not parts:
+        return "?"
+    first = parts[-2] if len(parts) >= 2 else parts[0]
+    first = first.rsplit(".", 1)[-1] or first
+    for prefix in ("หญิง", "นางสาว", "นาย", "นาง"):
+        if first.startswith(prefix) and len(first) > len(prefix):
+            first = first[len(prefix):]
+    for ch in first:
+        if ch not in "เแโใไ":
+            return ch.upper()
+    return first[:1].upper() or "?"
 
 
 def _search_text(item):
@@ -357,6 +383,37 @@ def _register(app):
             db.rollback()
             flash("ชื่อนี้มีอยู่แล้ว", "error")
         return redirect(url_for("owner_view", owner_id=owner_id, tab="settings"))
+
+    @app.route("/owners/<int:owner_id>/purge", methods=["POST"])
+    @login_required
+    def owner_purge(owner_id):
+        """ลบข้อมูลคดีทั้งหมดของเจ้าของนี้ (ข้อมูลลับ) ต้องยืนยันด้วยรหัสผ่านของผู้ที่กดลบ
+
+        delete_account=1 (เฉพาะเจ้าของบัญชีเอง): ลบบัญชีผู้ใช้และรายชื่อเจ้าของด้วย แล้วออกจากระบบ
+        """
+        owner = owner_or_404(owner_id)
+        db = get_db()
+        back = url_for("owner_view", owner_id=owner_id, tab="settings") + "#danger"
+        if not check_password_hash(g.user["password_hash"], request.form.get("password", "")):
+            flash("รหัสผ่านไม่ถูกต้อง ยังไม่ได้ลบข้อมูล", "error")
+            return redirect(back)
+        n = db.execute("SELECT COUNT(*) FROM cases WHERE owner_id = ?", (owner_id,)).fetchone()[0]
+        db.execute("DELETE FROM cases WHERE owner_id = ?", (owner_id,))
+        db.execute("UPDATE owners SET notes = '', as_of = NULL, tpo_date = NULL WHERE id = ?", (owner_id,))
+        db.execute("DELETE FROM uploads WHERE user_id = ?", (g.user["id"],))
+        own = g.user["role"] != "admin" and g.user["owner_id"] == owner_id
+        if own:
+            db.execute("DELETE FROM imports WHERE user_id = ?", (g.user["id"],))
+        if own and request.form.get("delete_account") == "1":
+            db.execute("DELETE FROM users WHERE id = ?", (g.user["id"],))
+            db.execute("DELETE FROM owners WHERE id = ?", (owner_id,))
+            db.commit()
+            session.clear()
+            flash(f"ลบข้อมูลคดี {n:,} รายการ และบัญชีผู้ใช้ของคุณเรียบร้อยแล้ว", "ok")
+            return redirect(url_for("login"))
+        db.commit()
+        flash(f"ลบข้อมูลคดีทั้งหมดของ {owner['name']} แล้ว ({n:,} รายการ)", "ok")
+        return redirect(url_for("owner_view", owner_id=owner_id))
 
     @app.route("/owners/<int:owner_id>/bulk", methods=["POST"])
     @login_required

@@ -1,12 +1,25 @@
 {% extends "base.html" %}
+{% from "_emblem.html" import emblem %}
 {% block content %}
-<div class="row">
-  <div>
-    <h1>เจ้าของข้อมูล (พนักงานสอบสวน)</h1>
-    <p class="sub">ข้อมูลคดีแยกตามเจ้าของ เมื่อนำเข้าไฟล์ thaipoliceonline เลือกได้ว่าจะนำเข้าคดีของพนักงานสอบสวนคนใด และแต่ละคนเป็นเจ้าของคดีของตัวเอง</p>
+{% set tot = namespace(cases=0, stmt=0, crim=0, users=0) %}
+{% for o in owners %}{% set tot.cases = tot.cases + (o.n_tpo or 0) %}{% set tot.stmt = tot.stmt + (o.n_stmt or 0) %}{% set tot.crim = tot.crim + (o.n_crim or 0) %}{% if o.users %}{% set tot.users = tot.users + 1 %}{% endif %}{% endfor %}
+<section class="hero">
+  <div class="grid-bg"></div>
+  {{ emblem("hero", "emblem hero-emblem") }}
+  <div class="eyebrow">{{ unit_short }} · ภาพรวมทั้งกอง</div>
+  <h1>เจ้าของข้อมูล (พนักงานสอบสวน)</h1>
+  <p class="sub">แต่ละคนเป็นเจ้าของคดีของตัวเอง · นำเข้าไฟล์ thaipoliceonline แล้วเลือกได้ว่าจะนำเข้าคดีของใคร</p>
+  <div class="row" style="margin-top:16px">
+    <a class="btn primary" href="{{ url_for('import_view') }}">นำเข้าไฟล์ Excel</a>
+    <a class="btn" href="{{ url_for('users') }}">ผู้ใช้งาน / เปิดรับสมัคร</a>
   </div>
-  <div class="spacer"></div>
-  <a class="btn primary" href="{{ url_for('import_view') }}">นำเข้าไฟล์ Excel</a>
+</section>
+<div class="stats">
+  <div class="stat"><div class="k">พนักงานสอบสวน</div><div class="v">{{ owners|length }}</div></div>
+  <div class="stat"><div class="k">มีบัญชีผู้ใช้แล้ว</div><div class="v">{{ tot.users }}</div></div>
+  <div class="stat"><div class="k">Case ID ทั้งหมด (1.1)</div><div class="v">{{ tot.cases }}</div></div>
+  <div class="stat"><div class="k">สอบปากคำแล้ว (1.2)</div><div class="v">{{ tot.stmt }}</div></div>
+  <div class="stat"><div class="k">รับเลขคดีอาญาแล้ว (1.3)</div><div class="v">{{ tot.crim }}</div></div>
 </div>
 
 {% if owners %}
