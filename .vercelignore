@@ -1,0 +1,6 @@
+tests/
+instance/
+*.xlsx
+*.xls
+*.sqlite3
+*.db

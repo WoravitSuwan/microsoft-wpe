@@ -43,11 +43,33 @@ python -m caseapp
 
 ตัวแปรที่ตั้งได้:
 
+- `DATABASE_URL` ถ้าตั้งเป็น `postgresql://...` จะใช้ Postgres แทน SQLite
 - `CASEAPP_DB` ที่เก็บฐานข้อมูล SQLite (ค่าเริ่มต้น `instance/caseapp.sqlite3`)
 - `SECRET_KEY` (ถ้าไม่ตั้ง ระบบสร้างและเก็บไว้ที่ `instance/secret_key`)
 - `HOST` / `PORT` (ค่าเริ่มต้น `127.0.0.1` / `5000`; ใช้ในเครือข่ายภายในตั้ง `HOST=0.0.0.0`)
 
 สำหรับใช้งานจริงหลายคน ควรรันผ่าน WSGI server เช่น `waitress-serve --call caseapp:create_app` หลัง HTTPS
+
+## นำขึ้น Vercel
+
+ไฟล์บน Vercel เป็นแบบชั่วคราว จึงต้องเก็บข้อมูลในฐานข้อมูล **Postgres** (Neon) แทน SQLite
+โค้ดรองรับทั้งสองแบบ: ถ้ามี `DATABASE_URL` (หรือ `POSTGRES_URL`) จะใช้ Postgres อัตโนมัติ
+
+1. vercel.com → **Add New… → Project** → Import repo `microsoft-wpe` (Framework Preset: **Other**) → Deploy
+   (ครั้งแรกจะเห็นหน้า "ตั้งค่าระบบยังไม่ครบ" เป็นปกติ)
+2. Project → **Storage** → Create Database → **Neon (Serverless Postgres)**
+   - เลือก Region **Singapore (ap-southeast-1)** ให้ตรงกับฟังก์ชัน (`vercel.json` ตั้งไว้ที่ `sin1`)
+   - Connect กับโปรเจกต์นี้ → ระบบเพิ่ม `DATABASE_URL` ให้เอง
+3. Project → Settings → **Environment Variables** → เพิ่ม `SECRET_KEY` = ข้อความสุ่มยาว ๆ
+   (สร้างได้ด้วย `python -c "import secrets; print(secrets.token_hex(32))"`)
+4. Deployments → **Redeploy** → เปิดเว็บ → สร้างบัญชีผู้ดูแลระบบ (ตารางในฐานข้อมูลสร้างให้อัตโนมัติ)
+
+หมายเหตุ
+
+- ไฟล์ที่นำเข้าได้ไม่เกิน 4 MB ต่อไฟล์ (ข้อจำกัดของ Vercel) ไฟล์ export ปกติประมาณ 0.2 MB
+- ทุกคนที่มี URL เปิดหน้าเข้าสู่ระบบได้ ข้อมูลคดีมีชื่อและเบอร์โทรผู้เสียหาย
+  ควรตั้งรหัสผ่านที่แข็งแรง และตรวจสอบนโยบายการเก็บข้อมูลส่วนบุคคล (PDPA) ของหน่วยงานก่อนใช้งานจริง
+- ถ้าต้องการจำกัดผู้เข้าถึงเพิ่ม ใช้ Vercel → Settings → **Deployment Protection**
 
 ## ทดสอบ
 
@@ -59,6 +81,8 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
+ทดสอบกับ Postgres ด้วย: ตั้ง `TEST_DATABASE_URL=postgresql://...` ก่อนรัน pytest
+
 การทดสอบใช้ข้อมูลสมมติเท่านั้น — **ห้าม commit ไฟล์ Excel หรือฐานข้อมูลที่มีข้อมูลคดีจริง** (`.gitignore` กันไว้แล้ว)
 
 ## โครงสร้าง
@@ -66,10 +90,12 @@ python -m pytest -q
 ```
 caseapp/
   app.py        เส้นทางเว็บ, ระบบผู้ใช้, สิทธิ์ตามเจ้าของ
-  db.py         ตาราง owners / users / cases และการ upsert ที่ไม่ลบข้อมูลที่กรอกเอง
+  db.py         ตาราง owners / users / cases (SQLite หรือ Postgres) และการ upsert ที่ไม่ลบข้อมูลที่กรอกเอง
   importer.py   อ่านไฟล์ thaipoliceonline และไฟล์รายงานเดิม
   report.py     คำนวณข้อ 1.1–1.5 และสร้างไฟล์ Excel ตามแบบเอกสารแนบ
   thaidate.py   แปลงวันที่ ค.ศ./พ.ศ. รูปแบบไทย
   templates/    หน้าเว็บ (ภาษาไทย)
+api/index.py    จุดเริ่มต้นบน Vercel
+vercel.json     ตั้งค่า Vercel (region sin1, เส้นทางทั้งหมดไปที่ Flask)
 tests/          ทดสอบด้วยข้อมูลสมมติ
 ```

@@ -13,19 +13,38 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request, s
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from . import importer, report
-from .db import MANUAL_FIELDS, get_db, init_db, placeholder_case_id, upsert_case
+from .db import (MANUAL_FIELDS, CaseCache, batch, database_url, get_db, init_db,
+                 placeholder_case_id, upsert_case)
 from .thaidate import be_slash, ce_slash, thai_short, thai_short_time, to_iso
+
+
+ON_VERCEL = bool(os.environ.get("VERCEL"))
+
+
+class ConfigError(RuntimeError):
+    pass
 
 
 def create_app(test_config=None):
     app = Flask(__name__, instance_relative_config=True)
+    test_config = test_config or {}
+    secret = test_config.get("SECRET_KEY") or os.environ.get("SECRET_KEY")
+    db_url = test_config.get("DATABASE_URL", database_url())
+    if ON_VERCEL and not test_config:
+        # ไฟล์ระบบบน Vercel เป็นแบบชั่วคราว: ต้องใช้ Postgres และ SECRET_KEY จาก Environment Variables
+        missing = [n for n, v in (("DATABASE_URL (Postgres)", db_url), ("SECRET_KEY", secret)) if not v]
+        if missing:
+            raise ConfigError(", ".join(missing))
     app.config.update(
-        SECRET_KEY=os.environ.get("SECRET_KEY") or _secret(app),
+        SECRET_KEY=secret or _secret(app),
         DATABASE=os.environ.get("CASEAPP_DB", os.path.join(app.instance_path, "caseapp.sqlite3")),
-        MAX_CONTENT_LENGTH=30 * 1024 * 1024,
+        DATABASE_URL=db_url,
+        MAX_CONTENT_LENGTH=4 * 1024 * 1024,  # Vercel รับคำขอได้ไม่เกิน 4.5 MB
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=ON_VERCEL,
+        SESSION_COOKIE_HTTPONLY=True,
     )
-    if test_config:
-        app.config.update(test_config)
+    app.config.update(test_config)
     init_db(app)
     app.jinja_env.filters.update(
         ce=ce_slash, be=be_slash, th=thai_short, thtime=thai_short_time,
@@ -95,6 +114,14 @@ def _form_text(name):
     v = request.form.get(name, "")
     v = " ".join(v.split()) if "\n" not in v else v.strip()
     return v or None
+
+
+def _role(text):
+    return "admin" if text == "admin" else "officer"
+
+
+def _int(text):
+    return int(text) if (text or "").strip().isdigit() else None
 
 
 def _money(text):
@@ -243,6 +270,7 @@ def _register(app):
             db.commit()
             flash("บันทึกข้อมูลเจ้าของแล้ว", "ok")
         except Exception:  # noqa: BLE001 - ชื่อซ้ำ
+            db.rollback()
             flash("ชื่อนี้มีอยู่แล้ว", "error")
         return redirect(url_for("owner_view", owner_id=owner_id, tab="settings"))
 
@@ -255,6 +283,7 @@ def _register(app):
         kind = request.form.get("kind")
         text = request.form.get("data", "")
         is_admin = g.user["role"] == "admin"
+        cache = CaseCache(db)
         n, bad = 0, []
         for line in text.splitlines():
             if not line.strip():
@@ -265,8 +294,8 @@ def _register(app):
                 if not re.match(r"^[A-Za-z]{1,3}\d{3,}$", cid):
                     bad.append(line)
                     continue
-                exists = db.execute("SELECT 1 FROM cases WHERE case_id = ?", (cid,)).fetchone()
-                res = upsert_case(db, owner_id, cid, allow_move=is_admin, fields={
+                exists = cache.get(cid) is not None
+                res = upsert_case(db, owner_id, cid, allow_move=is_admin, cache=cache, fields={
                     "statement_taken": 1,
                     "victim": parts[1] if len(parts) > 1 and not exists else None})
             elif kind == "s13":
@@ -279,7 +308,7 @@ def _register(app):
                           "complaint_date": to_iso(when, with_time=True), "c_status": cst or None}
                 if not cid:
                     cid, fields["no_case_id"] = placeholder_case_id(no), 1
-                res = upsert_case(db, owner_id, cid, fields, allow_move=is_admin)
+                res = upsert_case(db, owner_id, cid, fields, allow_move=is_admin, cache=cache)
             else:
                 abort(400)
             if res == "locked":
@@ -387,14 +416,17 @@ def _register(app):
                 wb = importer.load(f.stream)
                 kind = importer.detect_kind(wb)
                 if kind == "tpo":
-                    res = importer.import_tpo(db, wb, owner_id=owner_id, allow_move=is_admin)
+                    with batch(db):
+                        res = importer.import_tpo(db, wb, owner_id=owner_id, allow_move=is_admin)
                     m = re.search(r"(20\d{2})(\d{2})(\d{2})", f.filename)
                     tpo_date = (f"{m[1]}-{m[2]}-{m[3]}" if m else date.today().isoformat())
                     for oid in res["per_owner"]:
                         db.execute("UPDATE owners SET tpo_date = ? WHERE id = ?", (tpo_date, oid))
                     label = "thaipoliceonline"
                 elif kind == "report":
-                    res = importer.import_report(db, wb, owner_id=owner_id, allow_move=is_admin)
+                    with batch(db):
+                        res = importer.import_report(db, wb, owner_id=owner_id,
+                                                     allow_move=is_admin)
                     res["per_owner"] = {res["owner_id"]: res["rows"]}
                     label = "รายงานเดิม (เอกสารแนบ)"
                 else:
@@ -431,13 +463,13 @@ def _register(app):
                     db.execute("INSERT INTO users (username, password_hash, display_name, role, owner_id) "
                                "VALUES (?, ?, ?, ?, ?)",
                                (u, generate_password_hash(p), _form_text("display_name") or u,
-                                request.form.get("role", "officer"),
-                                request.form.get("owner_id") or None))
+                                _role(request.form.get("role")),
+                                _int(request.form.get("owner_id"))))
                     flash(f"สร้างผู้ใช้ {u} แล้ว", "ok")
                 elif action == "update":
                     uid = int(request.form["id"])
                     db.execute("UPDATE users SET role = ?, owner_id = ?, display_name = ? WHERE id = ?",
-                               (request.form.get("role", "officer"), request.form.get("owner_id") or None,
+                               (_role(request.form.get("role")), _int(request.form.get("owner_id")),
                                 _form_text("display_name") or "", uid))
                     if request.form.get("password"):
                         if len(request.form["password"]) < 6:
@@ -475,6 +507,7 @@ def _register(app):
                 db.commit()
                 return redirect(url_for("owner_view", owner_id=cur.lastrowid, tab="settings"))
             except Exception:  # noqa: BLE001
+                db.rollback()
                 flash("ชื่อนี้มีอยู่แล้ว", "error")
         elif action == "delete":
             oid = int(request.form["id"])
