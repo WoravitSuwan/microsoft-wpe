@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+  <div>
+    <h1>เจ้าของข้อมูล (พนักงานสอบสวน)</h1>
+    <p class="sub">ข้อมูลคดีแยกตามเจ้าของ เมื่อนำเข้าไฟล์ thaipoliceonline ระบบจะแยกเจ้าของตามคอลัมน์ "พนักงานสอบสวน" ให้อัตโนมัติ</p>
+  </div>
+  <div class="spacer"></div>
+  <a class="btn primary" href="{{ url_for('import_view') }}">นำเข้าไฟล์ Excel</a>
+</div>
+
+{% if owners %}
+<div class="tbl-wrap">
+<table class="data">
+  <thead><tr><th>เจ้าของข้อมูล</th><th>ตำแหน่ง/สังกัด</th><th>Case ID (1.1)</th><th>สอบปากคำแล้ว (1.2)</th><th>คดีอาญา (1.3)</th><th>บัญชีผู้ใช้</th><th></th></tr></thead>
+  <tbody>
+  {% for o in owners %}
+    <tr>
+      <td><a href="{{ url_for('owner_view', owner_id=o.id) }}"><b>{{ o.name }}</b></a></td>
+      <td>{{ o.position }}</td>
+      <td class="num">{{ o.n_tpo or 0 }}</td>
+      <td class="num">{{ o.n_stmt or 0 }}</td>
+      <td class="num">{{ o.n_crim or 0 }}</td>
+      <td>{% if o.users %}{{ o.users }}{% else %}<span class="badge muted">ยังไม่มี</span>{% endif %}</td>
+      <td class="nowrap">
+        <a class="btn small" href="{{ url_for('owner_export', owner_id=o.id) }}">ดาวน์โหลด Excel</a>
+        <form method="post" action="{{ url_for('owners_admin') }}" style="display:inline" data-confirm="ลบ {{ o.name }} และคดีทั้งหมด {{ o.n_cases }} รายการ?">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="{{ o.id }}">
+          <button class="btn small danger">ลบ</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="card empty">ยังไม่มีข้อมูล — เริ่มจาก <a href="{{ url_for('import_view') }}">นำเข้าไฟล์ Excel</a></div>
+{% endif %}
+
+<details class="card" style="margin-top:18px">
+  <summary>เพิ่มเจ้าของข้อมูลเอง</summary>
+  <form method="post" action="{{ url_for('owners_admin') }}" class="grid" style="margin-top:12px">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
+    <div><label>ยศ ชื่อ สกุล</label><input type="text" name="name" required placeholder="พ.ต.ต.อำพล ทองอร่าม"></div>
+    <div><label>ตำแหน่ง/สังกัด</label><input type="text" name="position" placeholder="สว.(สอบสวน) กก.1 บก.สอท.4"></div>
+    <div style="align-self:end"><button class="btn primary">เพิ่ม</button></div>
+  </form>
+</details>
+
+{% if imports %}
+<h2>ประวัติการนำเข้าล่าสุด</h2>
+<div class="tbl-wrap"><table class="data">
+  <thead><tr><th>เวลา</th><th>ไฟล์</th><th>ประเภท</th><th>ผู้นำเข้า</th><th>ผลลัพธ์</th></tr></thead>
+  <tbody>{% for i in imports %}{% set s = loads(i.summary) %}
+    <tr><td class="nowrap">{{ i.created_at }}</td><td>{{ i.filename }}</td><td>{{ s.kind }}</td><td>{{ i.username }}</td>
+      <td>{{ s.rows }} แถว · ใหม่ {{ s.created }} · อัปเดต {{ s.updated }}{% if s.locked %} · ข้าม {{ s.locked }}{% endif %}
+        — {% for n, c in s.owners.items() %}{{ n }} ({{ c }}){% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+  {% endfor %}</tbody>
+</table></div>
+{% endif %}
+{% endblock %}

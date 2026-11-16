@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>นำเข้าไฟล์ Excel</h1>
+<p class="sub">ระบบตรวจรูปแบบไฟล์ให้อัตโนมัติ ข้อมูลที่กรอกในเว็บแล้ว (สอบปากคำ, คดีอาญา, ค้างเกิน 6 เดือน) จะไม่ถูกลบเมื่อนำเข้าซ้ำ</p>
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-bottom:18px">
+  <div class="card" style="margin:0"><b>ไฟล์ export จาก thaipoliceonline</b>
+    <p class="hint">เช่น ค่าเริ่มต้น__20261116_083829.xlsx — ใช้ทำข้อ 1.1 และแยกเจ้าของตามคอลัมน์ "พนักงานสอบสวน"</p></div>
+  <div class="card" style="margin:0"><b>ไฟล์รายงานเดิม (แบบเอกสารแนบ)</b>
+    <p class="hint">เช่น เอกสารแนบ_รายงานข้อมูลคดีและCaseID_พ.ต.ต.อำพล.xlsx — ย้ายข้อมูลข้อ 1.1–1.5 ที่ทำไว้แล้วเข้าระบบ</p></div>
+</div>
+<form method="post" enctype="multipart/form-data" class="card" style="max-width:640px">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <p><label>ไฟล์ Excel (.xlsx)</label><input type="file" name="file" accept=".xlsx" required></p>
+  {% if is_admin %}
+  <p><label>เจ้าของข้อมูล</label>
+    <select name="owner">
+      <option value="auto">แยกอัตโนมัติตามชื่อพนักงานสอบสวนในไฟล์</option>
+      {% for o in owners %}<option value="{{ o.id }}">นำเข้าทั้งหมดเป็นของ {{ o.name }}</option>{% endfor %}
+    </select>
+    <span class="hint">เลือกเจ้าของเมื่อคดีในไฟล์ยังระบุพนักงานสอบสวนคนเดิม แต่โอนมาอยู่ในความรับผิดชอบของคนใหม่แล้ว</span></p>
+  {% else %}
+  <p class="hint">ข้อมูลทั้งหมดในไฟล์จะนำเข้าเป็นของคุณ</p>
+  {% endif %}
+  <button class="btn primary">นำเข้า</button>
+</form>
+{% endblock %}

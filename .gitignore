@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+# ฐานข้อมูลและ secret key (มีข้อมูลคดีจริง ห้าม commit)
+instance/
+*.sqlite3
+*.db
+# ไฟล์ Excel ข้อมูลจริง (ชื่อผู้เสียหาย / เบอร์โทร) ห้าม commit
+*.xlsx
+*.xls
+.venv/
