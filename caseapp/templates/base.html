@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}รายงานข้อมูลคดีและ Case ID{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="{{ url_for('index') }}">รายงานข้อมูลคดีและ Case ID</a>
+  {% if g.user %}
+  <nav>
+    {% if g.user.role == 'admin' %}
+      <a href="{{ url_for('index') }}" class="{{ 'on' if request.endpoint == 'index' }}">เจ้าของข้อมูลทั้งหมด</a>
+    {% elif g.user.owner_id %}
+      <a href="{{ url_for('owner_view', owner_id=g.user.owner_id) }}" class="{{ 'on' if request.endpoint == 'owner_view' }}">ข้อมูลของฉัน</a>
+    {% endif %}
+    <a href="{{ url_for('import_view') }}" class="{{ 'on' if request.endpoint == 'import_view' }}">นำเข้าไฟล์ Excel</a>
+    {% if g.user.role == 'admin' %}
+      <a href="{{ url_for('users') }}" class="{{ 'on' if request.endpoint == 'users' }}">ผู้ใช้งาน</a>
+    {% endif %}
+  </nav>
+  <div class="who">
+    <span>{{ g.user.display_name or g.user.username }}{% if g.user.role == 'admin' %} · ผู้ดูแลระบบ{% endif %}</span>
+    <a href="{{ url_for('password') }}" style="color:#c5d0e4">เปลี่ยนรหัสผ่าน</a>
+    <form method="post" action="{{ url_for('logout') }}" style="margin:0">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button type="submit">ออกจากระบบ</button>
+    </form>
+  </div>
+  {% endif %}
+</header>
+<main>
+  {% for cat, msg in get_flashed_messages(with_categories=true) %}
+    <div class="flash {{ cat }}">{{ msg }}</div>
+  {% endfor %}
+  {% block content %}{% endblock %}
+</main>
+<script>
+// ค้นหาในตาราง: <input data-filter="#tableId">
+document.querySelectorAll('input[data-filter]').forEach(function (inp) {
+  var tbl = document.querySelector(inp.dataset.filter);
+  if (!tbl) return;
+  inp.addEventListener('input', function () {
+    var q = inp.value.trim().toLowerCase();
+    var shown = 0;
+    tbl.querySelectorAll('tbody tr').forEach(function (tr) {
+      var hit = !q || tr.textContent.toLowerCase().indexOf(q) !== -1;
+      tr.style.display = hit ? '' : 'none';
+      if (hit) shown++;
+    });
+    var out = document.querySelector(inp.dataset.count || '');
+    if (out) out.textContent = shown;
+  });
+});
+document.querySelectorAll('form[data-confirm]').forEach(function (f) {
+  f.addEventListener('submit', function (e) { if (!confirm(f.dataset.confirm)) e.preventDefault(); });
+});
+</script>
+</body>
+</html>

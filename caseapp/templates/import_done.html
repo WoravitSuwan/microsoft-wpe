@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h1>นำเข้าสำเร็จ</h1>
+  <p class="sub">{{ filename }} · {{ s.kind }}</p>
+  <div class="stats">
+    <div class="stat"><div class="k">แถวที่อ่านได้</div><div class="v">{{ s.rows }}</div></div>
+    <div class="stat"><div class="k">Case ID ใหม่</div><div class="v">{{ s.created }}</div></div>
+    <div class="stat"><div class="k">อัปเดตของเดิม</div><div class="v">{{ s.updated }}</div></div>
+    {% if s.locked %}<div class="stat"><div class="k">ข้าม (ล็อกเจ้าของไว้)</div><div class="v">{{ s.locked }}</div></div>{% endif %}
+  </div>
+  <h2>แยกตามเจ้าของข้อมูล</h2>
+  <table class="summary">
+    <thead><tr><th>เจ้าของ</th><th>จำนวนแถว</th><th></th></tr></thead>
+    <tbody>{% for name, n in s.owners.items() %}
+      <tr><td>{{ name }}</td><td class="n">{{ n }}</td>
+        <td><a href="{{ url_for('owner_view', owner_id=owner_ids[name]) }}">ดูรายงาน</a> ·
+            <a href="{{ url_for('owner_export', owner_id=owner_ids[name]) }}">ดาวน์โหลด Excel</a></td></tr>
+    {% endfor %}</tbody>
+  </table>
+</div>
+{% endblock %}

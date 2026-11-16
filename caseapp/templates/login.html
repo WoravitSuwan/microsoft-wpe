@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card login-box">
+  <h1>เข้าสู่ระบบ</h1>
+  <p class="sub">แต่ละบัญชีเห็นเฉพาะข้อมูลคดีของเจ้าของที่ผูกไว้</p>
+  <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <p><label>ชื่อผู้ใช้</label><input type="text" name="username" required autofocus></p>
+    <p><label>รหัสผ่าน</label><input type="password" name="password" required></p>
+    <button class="btn primary" type="submit">เข้าสู่ระบบ</button>
+  </form>
+</div>
+{% endblock %}

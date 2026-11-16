@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}{{ owner.name }} · รายงานข้อมูลคดี{% endblock %}
+{% macro edit(c, tab) %}<a class="btn small" href="{{ url_for('case_edit', case_pk=c.id, back=url_for('owner_view', owner_id=owner.id, tab=tab)) }}">แก้ไข</a>{% endmacro %}
+{% macro cid(c) %}{% if c.no_case_id %}<span class="badge muted">ไม่มี Case ID</span>{% else %}{{ c.case_id }}{% endif %}{% endmacro %}
+{% macro search(tid, n) %}
+<div class="row" style="margin-bottom:10px">
+  <input type="text" class="search" placeholder="ค้นหา Case ID / ชื่อ / เลขคดี" data-filter="#{{ tid }}" data-count="#{{ tid }}-n">
+  <span class="sub" style="margin:0">แสดง <b id="{{ tid }}-n">{{ n }}</b> รายการ</span>
+</div>
+{% endmacro %}
+{% block content %}
+<div class="row">
+  <div>
+    <h1>{{ owner.name }}</h1>
+    <p class="sub" style="margin:0">{{ owner.position or 'ยังไม่ระบุตำแหน่ง/สังกัด' }} · ข้อมูล ณ วันที่ {{ rep.as_of|th }}</p>
+  </div>
+  <div class="spacer"></div>
+  <a class="btn" href="{{ url_for('case_new', owner_id=owner.id) }}">+ เพิ่ม Case ID</a>
+  <a class="btn primary" href="{{ url_for('owner_export', owner_id=owner.id) }}">ดาวน์โหลด Excel (แบบเอกสารแนบ)</a>
+</div>
+
+{% set tabs = [('summary','สรุป',None),('s11','1.1 Case ID ทั้งหมด',counts.s11),('s12','1.2 สอบปากคำแล้ว',counts.s12),
+               ('s13','1.3 คดีอาญา (C.)',counts.s13),('s14','1.4 ปรับปรุงข้อมูล C.',counts.s14),
+               ('s15','1.5 ค้างเกิน 6 เดือน',counts.s15),('settings','ตั้งค่ารายงาน',None)] %}
+<div class="tabs">
+  {% for key, label, n in tabs %}
+    <a href="{{ url_for('owner_view', owner_id=owner.id, tab=key) }}" class="{{ 'on' if tab == key }}">{{ label }}{% if n is not none %}<span class="n">{{ n }}</span>{% endif %}</a>
+  {% endfor %}
+</div>
+
+{% if tab == 'summary' %}
+  <div class="stats">
+    <a class="stat" href="?tab=s11"><div class="k">1.1 Case ID ทั้งหมด</div><div class="v">{{ counts.s11 }}</div></a>
+    <a class="stat" href="?tab=s12"><div class="k">1.2 สอบปากคำแล้ว</div><div class="v">{{ counts.s12 }}</div></a>
+    <a class="stat" href="?tab=s13"><div class="k">1.3 รับเลขคดีอาญาแล้ว</div><div class="v">{{ counts.s13 }}</div></a>
+    <a class="stat" href="?tab=s14"><div class="k">1.4 ต้องปรับปรุงข้อมูล C.</div><div class="v">{{ counts.s14 }}</div></a>
+    <a class="stat" href="?tab=s15"><div class="k">1.5 ค้างเกิน 6 เดือน</div><div class="v">{{ counts.s15 }}</div></a>
+  </div>
+  <div class="card">
+    <h2 style="margin-top:0">สรุปข้อมูลคดีและ Case ID ในความรับผิดชอบ</h2>
+    <p class="sub">{{ rep.summary_who }}</p>
+    <table class="summary">
+      <thead><tr><th>ข้อ</th><th>รายการ</th><th>จำนวน</th><th>หน่วย</th></tr></thead>
+      <tbody>
+        <tr class="main"><td>1.1</td><td>จำนวน Case ID ทั้งหมดในความรับผิดชอบ</td><td class="n">{{ counts.s11 }}</td><td>รายการ</td></tr>
+        <tr class="main"><td>1.2</td><td>จำนวน Case ID ที่ดำเนินการสอบปากคำแล้ว</td><td class="n">{{ counts.s12 }}</td><td>รายการ</td></tr>
+        <tr class="main"><td>1.3</td><td>จำนวน Case ID ที่รับเลขคดีอาญา (C.) แล้ว</td><td class="n">{{ counts.s13 }}</td><td>คดี</td></tr>
+        <tr><td></td><td>&nbsp;&nbsp; - จำนวนคดีที่จำหน่ายแล้ว</td><td class="n">{{ counts.s13_disposed }}</td><td>คดี</td></tr>
+        <tr><td></td><td>&nbsp;&nbsp; - จำนวนคดีที่อยู่ระหว่างสอบสวน</td><td class="n">{{ counts.s13_investigating }}</td><td>คดี</td></tr>
+        <tr class="main"><td>1.4</td><td>จำนวนคดีอาญาที่ต้องปรับปรุงข้อมูลในระบบ C.</td><td class="n">{{ counts.s14 }}</td><td>คดี</td></tr>
+        <tr class="main"><td>1.5</td><td>จำนวนสำนวนการสอบสวนที่ค้างเกิน 6 เดือน</td><td class="n">{{ counts.s15 }}</td><td>สำนวน</td></tr>
+        <tr><td></td><td>&nbsp;&nbsp; {{ report.GROUP_A }}</td><td class="n">{{ counts.s15_a }}</td><td>สำนวน</td></tr>
+        <tr><td></td><td>&nbsp;&nbsp; {{ report.GROUP_B }}</td><td class="n">{{ counts.s15_b }}</td><td>สำนวน</td></tr>
+        {% for r, n in counts.reasons %}
+        <tr><td></td><td>&nbsp;&nbsp; - {{ r }}</td><td class="n">{{ n }}</td><td>สำนวน</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if counts.reasons_missing %}<p class="flash warn" style="margin-top:12px">มี {{ counts.reasons_missing }} สำนวนในข้อ 1.5 ที่ยังไม่ระบุเหตุผลที่ค้าง</p>{% endif %}
+    <h2>หมายเหตุ (จะแสดงในไฟล์ Excel)</h2>
+    <ol class="notes">{% for n in rep.notes() %}<li>{{ n }}</li>{% endfor %}</ol>
+  </div>
+
+{% elif tab == 's11' %}
+  <p class="sub">จากไฟล์ export ระบบ thaipoliceonline · คอลัมน์ "พนักงานสอบสวน" คือชื่อตามระบบ (ถ้าไม่ตรงกับเจ้าของจะมีป้ายสีเหลือง)</p>
+  {{ search('t11', rep.s11|length) }}
+  <div class="tbl-wrap"><table class="data" id="t11">
+    <thead><tr><th>ลำดับ</th><th>Case ID</th><th>วันที่รับแจ้ง</th><th>ผู้เสียหาย</th><th>ประเภทคดี</th><th>มูลค่าความเสียหาย (บาท)</th><th>เลขคดีอาญา</th><th>พนักงานสอบสวน</th><th>สถานะ</th><th>สอบปากคำ</th><th></th></tr></thead>
+    <tbody>{% for c in rep.s11 %}
+      <tr><td class="num">{{ loop.index }}</td><td class="nowrap">{{ c.case_id }}</td><td class="nowrap">{{ c.report_date|ce }}</td>
+        <td>{{ c.victim or '' }}</td><td class="clip">{{ c.case_type or '' }}</td><td class="num">{{ c.damage|money }}</td>
+        <td class="nowrap">{{ c.tpo_criminal_no or '' }}</td>
+        <td>{% if c.system_investigator and c.system_investigator != owner.name %}<span class="badge warn">{{ c.system_investigator }}</span>{% else %}{{ c.system_investigator or '' }}{% endif %}</td>
+        <td><span class="badge">{{ c.status or '' }}</span></td>
+        <td>{% if c.statement_taken %}<span class="badge ok">แล้ว</span>{% endif %}</td>
+        <td>{{ edit(c, 's11') }}</td></tr>
+    {% else %}<tr><td colspan="11" class="empty">ยังไม่มีข้อมูล — นำเข้าไฟล์ export thaipoliceonline</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+{% elif tab == 's12' %}
+  <p class="sub">Case ID ที่ดำเนินการสอบปากคำแล้ว (ตาม CCMS: มีสำนวนแล้ว) — ทำเครื่องหมายได้ที่ปุ่มแก้ไข หรือวางรายการ Case ID ด้านล่าง</p>
+  <details class="card">
+    <summary>วางรายการ Case ID จาก CCMS (หลายรายการพร้อมกัน)</summary>
+    <form method="post" action="{{ url_for('owner_bulk', owner_id=owner.id) }}" style="margin-top:10px">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="kind" value="s12">
+      <textarea name="data" placeholder="บรรทัดละ 1 รายการ: Case ID [Tab] ผู้เสียหาย (ไม่บังคับ)&#10;C660614929	ศิวดี พุทธิพันธ์"></textarea>
+      <p class="hint">คัดลอกจาก Excel ได้โดยตรง · Case ID ที่ยังไม่มีในข้อ 1.1 จะถูกเพิ่มเป็น "ไม่อยู่ในรายการ 1.1"</p>
+      <button class="btn primary">บันทึกว่าสอบปากคำแล้ว</button>
+    </form>
+  </details>
+  {{ search('t12', rep.s12|length) }}
+  <div class="tbl-wrap"><table class="data" id="t12">
+    <thead><tr><th>ลำดับ</th><th>Case ID</th><th>ผู้เสียหาย</th><th>สถานะ (thaipoliceonline)</th><th>หมายเหตุ</th><th></th></tr></thead>
+    <tbody>{% for c in rep.s12 %}
+      <tr><td class="num">{{ loop.index }}</td><td>{{ c.case_id }}</td><td>{{ c.victim or '' }}</td>
+        <td>{% if c.in_tpo %}{{ c.status or '' }}{% endif %}</td>
+        <td>{% if c.in_tpo %}อยู่ในรายการ 1.1{% else %}<span class="badge warn">ไม่อยู่ในรายการ 1.1</span>{% endif %}</td>
+        <td>{{ edit(c, 's12') }}</td></tr>
+    {% else %}<tr><td colspan="6" class="empty">ยังไม่มีรายการ</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+{% elif tab == 's13' %}
+  <p class="sub">Case ID ที่รับเลขคดีอาญา (C.) แล้ว · "สถานะที่รายงาน" คำนวณจากสถานะในระบบ C. เทียบกับสถานะจริง</p>
+  <details class="card">
+    <summary>วางข้อมูลจากระบบ C. (CRIMES) หลายรายการพร้อมกัน</summary>
+    <form method="post" action="{{ url_for('owner_bulk', owner_id=owner.id) }}" style="margin-top:10px">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="kind" value="s13">
+      <textarea name="data" placeholder="เลขคดีอาญา [Tab] Case ID (เว้นว่างได้) [Tab] ผู้ร้องทุกข์ [Tab] วันที่รับคำร้องทุกข์ [Tab] สถานะในระบบ C.&#10;323/2569	W69103028719	นาย ณัฐภัชศร แซ่ตั้ง	30 ต.ค. 2569 14:42	ระหว่างสอบสวน"></textarea>
+      <p class="hint">วันที่รับได้ทั้ง "30 ต.ค. 2569 14:42", "30/10/2569" หรือ "30/10/2026" · ถ้าสถานะจริงต่างจากระบบ C. ให้แก้ที่ปุ่มแก้ไขของแต่ละคดี</p>
+      <button class="btn primary">บันทึกข้อมูลคดีอาญา</button>
+    </form>
+  </details>
+  {{ search('t13', rep.s13|length) }}
+  <div class="tbl-wrap"><table class="data" id="t13">
+    <thead><tr><th>ลำดับ</th><th>เลขคดีอาญา</th><th>Case ID</th><th>ผู้ร้องทุกข์</th><th>วันที่รับคำร้องทุกข์</th><th>สถานะในระบบ C.</th><th>สถานะที่รายงาน</th><th></th></tr></thead>
+    <tbody>{% for c in rep.s13 %}{% set st = report.reported_status(c) %}
+      <tr><td class="num">{{ loop.index }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
+        <td>{{ c.complainant or c.victim or '' }}</td>
+        <td class="nowrap {{ 'missing' if not c.complaint_date }}">{{ c.complaint_date|thtime }}</td>
+        <td class="{{ 'missing' if not c.c_status }}">{{ c.c_status or '' }}</td>
+        <td>{% if st == report.NEEDS_UPDATE %}<span class="badge warn">{{ st }}</span>{% elif st %}<span class="badge">{{ st }}</span>{% endif %}</td>
+        <td>{{ edit(c, 's13') }}</td></tr>
+    {% else %}<tr><td colspan="8" class="empty">ยังไม่มีรายการ</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+{% elif tab == 's14' %}
+  <p class="sub">คดีอาญาที่สถานะในระบบ C. ไม่ตรงกับสถานะจริงของสำนวน (แก้ "สถานะจริง" ได้ที่ปุ่มแก้ไข)</p>
+  {{ search('t14', rep.s14|length) }}
+  <div class="tbl-wrap"><table class="data" id="t14">
+    <thead><tr><th>ลำดับ</th><th>เลขคดีอาญา</th><th>Case ID</th><th>ผู้ร้องทุกข์</th><th>สถานะในระบบ C.</th><th>สถานะจริง</th><th>การดำเนินการ</th><th></th></tr></thead>
+    <tbody>{% for c in rep.s14 %}
+      <tr><td class="num">{{ loop.index }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
+        <td>{{ c.complainant or c.victim or '' }}</td><td>{{ c.c_status }}</td><td>{{ c.actual_status }}</td>
+        <td>{{ c.c_action or report.DEFAULT_ACTION }}</td><td>{{ edit(c, 's14') }}</td></tr>
+    {% else %}<tr><td colspan="8" class="empty">ไม่มีคดีที่ต้องปรับปรุงข้อมูล</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+{% elif tab == 's15' %}
+  <p class="sub">สำนวนที่สถานะจริง "ระหว่างสอบสวน" และรับคำร้องทุกข์ก่อน {{ rep.as_of|th }} เกิน 6 เดือน · ช่องสีเหลือง = ยังไม่ได้กรอก</p>
+  {{ search('t15', rep.s15|length) }}
+  <div class="tbl-wrap"><table class="data" id="t15">
+    <thead><tr><th>ลำดับ</th><th>กลุ่ม</th><th>เลขคดีอาญา</th><th>Case ID</th><th>ผู้เสียหาย</th><th>ความเสียหาย (บาท)</th><th>ศาล</th><th>วันที่รับคำร้องทุกข์</th><th>เหตุผลที่ค้าง</th><th>รายละเอียด</th><th>แนวทางเร่งรัด</th><th>หลักฐานที่แนบ</th><th></th></tr></thead>
+    <tbody>{% for r in rep.s15 %}{% set c = r.case %}
+      <tr><td class="num">{{ loop.index }}</td><td class="nowrap">{{ r.group }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
+        <td>{{ r.victim or '' }}</td><td class="num">{{ r.damage|money }}</td>
+        <td class="{{ 'missing' if not c.court }}">{{ c.court or '' }}</td><td class="nowrap">{{ r.date|be }}</td>
+        <td class="{{ 'missing' if not c.backlog_reason }}">{{ c.backlog_reason or '' }}</td>
+        <td class="clip {{ 'missing' if not c.backlog_detail }}">{{ c.backlog_detail or '' }}</td>
+        <td class="clip {{ 'missing' if not c.backlog_plan }}">{{ c.backlog_plan or '' }}</td>
+        <td class="clip {{ 'missing' if not c.backlog_evidence }}">{{ c.backlog_evidence or '' }}</td>
+        <td>{{ edit(c, 's15') }}</td></tr>
+    {% else %}<tr><td colspan="13" class="empty">ไม่มีสำนวนค้างเกิน 6 เดือน</td></tr>{% endfor %}</tbody>
+  </table></div>
+
+{% elif tab == 'settings' %}
+  <form method="post" action="{{ url_for('owner_settings', owner_id=owner.id) }}" class="card">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div class="grid">
+      <div><label>ยศ ชื่อ สกุล (เจ้าของข้อมูล)</label>
+        <input type="text" name="name" value="{{ owner.name }}" {{ 'readonly' if g.user.role != 'admin' }}>
+        <div class="hint">ใช้ตั้งชื่อไฟล์: {{ report.export_filename(owner.name) }}</div></div>
+      <div><label>ตำแหน่ง/สังกัด</label><input type="text" name="position" value="{{ owner.position or '' }}" placeholder="สว.(สอบสวน) กก.1 บก.สอท.4"></div>
+      <div><label>ข้อมูล ณ วันที่</label><input type="date" name="as_of" value="{{ owner.as_of or '' }}">
+        <div class="hint">เว้นว่าง = วันนี้ · ใช้นับอายุคดีข้อ 1.5</div></div>
+      <div><label>วันที่ไฟล์ export thaipoliceonline</label><input type="date" name="tpo_date" value="{{ owner.tpo_date or '' }}">
+        <div class="hint">ตั้งอัตโนมัติจากชื่อไฟล์ตอนนำเข้า</div></div>
+      <div class="wide"><label>หมายเหตุเพิ่มเติม (บรรทัดละ 1 ข้อ)</label>
+        <textarea name="notes" rows="6" placeholder="เช่น คดี 609/2568 และ 612/2568 มีในระบบ C. แต่ยังไม่มีใน CCMS">{{ owner.notes or '' }}</textarea>
+        <div class="hint">หมายเหตุข้อ 1.1, 1.2, 1.3 และ 1.5 ระบบสร้างให้อัตโนมัติจากข้อมูล — ใส่บรรทัด {1.1} {1.2} {1.3} หรือ {1.5} เพื่อกำหนดตำแหน่งของข้อนั้น</div></div>
+    </div>
+    <p><button class="btn primary">บันทึก</button></p>
+  </form>
+{% endif %}
+{% endblock %}

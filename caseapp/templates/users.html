@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>ผู้ใช้งาน</h1>
+<p class="sub">ผูกบัญชีกับเจ้าของข้อมูล เพื่อให้พนักงานสอบสวนแต่ละคนเห็นและแก้ไขได้เฉพาะคดีของตัวเอง · ผู้ดูแลระบบเห็นทุกเจ้าของ</p>
+<div class="tbl-wrap" style="margin-bottom:18px"><table class="data">
+  <thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>สิทธิ์</th><th>เจ้าของข้อมูล</th><th>รหัสผ่านใหม่</th><th></th></tr></thead>
+  <tbody>{% for u in users %}{% set f = 'u' ~ u.id %}
+    <tr>
+      <td><b>{{ u.username }}</b></td>
+      <td><input form="{{ f }}" type="text" name="display_name" value="{{ u.display_name or '' }}"></td>
+      <td><select form="{{ f }}" name="role"><option value="officer" {{ 'selected' if u.role=='officer' }}>พนักงานสอบสวน</option><option value="admin" {{ 'selected' if u.role=='admin' }}>ผู้ดูแลระบบ</option></select></td>
+      <td><select form="{{ f }}" name="owner_id"><option value="">— ไม่ผูก —</option>{% for o in owners %}<option value="{{ o.id }}" {{ 'selected' if o.id == u.owner_id }}>{{ o.name }}</option>{% endfor %}</select></td>
+      <td><input form="{{ f }}" type="password" name="password" placeholder="เว้นว่าง = ไม่เปลี่ยน"></td>
+      <td class="nowrap"><button form="{{ f }}" class="btn small" name="action" value="update">บันทึก</button>
+        <button form="{{ f }}" class="btn small danger" name="action" value="delete" onclick="return confirm('ลบผู้ใช้ {{ u.username }}?')">ลบ</button></td>
+    </tr>
+  {% endfor %}</tbody>
+</table></div>
+{% for u in users %}<form id="u{{ u.id }}" method="post"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="id" value="{{ u.id }}"></form>{% endfor %}
+<form method="post" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
+  <h2 style="margin-top:0">เพิ่มผู้ใช้</h2>
+  <div class="grid">
+    <div><label>ชื่อผู้ใช้</label><input type="text" name="username" required></div>
+    <div><label>ชื่อที่แสดง</label><input type="text" name="display_name"></div>
+    <div><label>รหัสผ่าน</label><input type="password" name="password" required minlength="6"></div>
+    <div><label>สิทธิ์</label><select name="role"><option value="officer">พนักงานสอบสวน</option><option value="admin">ผู้ดูแลระบบ</option></select></div>
+    <div><label>เจ้าของข้อมูล</label><select name="owner_id"><option value="">— ไม่ผูก —</option>{% for o in owners %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}</select></div>
+  </div>
+  <p><button class="btn primary">เพิ่มผู้ใช้</button></p>
+</form>
+{% endblock %}

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}{{ c.case_id }} · แก้ไข{% endblock %}
+{% block content %}
+<h1>{% if c.no_case_id %}คดีอาญา {{ c.criminal_no }} <span class="badge muted">ยังไม่มี Case ID</span>{% else %}{{ c.case_id }}{% endif %}</h1>
+<p class="sub">เจ้าของข้อมูล: <a href="{{ url_for('owner_view', owner_id=owner.id) }}">{{ owner.name }}</a>
+  {% if c.in_tpo %} · <span class="badge">อยู่ในรายการ 1.1</span>{% else %} · <span class="badge warn">ไม่อยู่ในรายการ 1.1</span>{% endif %}
+  {% if c.owner_locked %} · <span class="badge muted">กำหนดเจ้าของเอง</span>{% endif %}</p>
+
+<form method="post">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <input type="hidden" name="back" value="{{ back }}">
+
+  {% if c.no_case_id %}
+  <fieldset><legend>Case ID</legend>
+    <input type="text" name="new_case_id" placeholder="กรอกเมื่อได้รับ Case ID แล้ว">
+    <p class="hint">คดีนี้มีในระบบ C. แต่ยังไม่มี Case ID (ในรายงานช่อง Case ID จะว่าง)</p>
+  </fieldset>
+  {% endif %}
+  <fieldset><legend>ข้อมูลจาก thaipoliceonline</legend>
+    {% if c.in_tpo %}
+    <div class="grid">
+      <div><label>วันที่รับแจ้ง</label>{{ c.report_date|ce }}</div>
+      <div><label>ผู้เสียหาย</label>{{ c.victim or '-' }}</div>
+      <div><label>ประเภทคดี</label>{{ c.case_type or '-' }}</div>
+      <div><label>มูลค่าความเสียหาย</label>{{ c.damage|money or '-' }} บาท</div>
+      <div><label>พนักงานสอบสวน (ตามระบบ)</label>{{ c.system_investigator or '-' }}</div>
+      <div><label>พนักงานสืบสวน</label>{{ c.detective or '-' }}</div>
+      <div><label>สถานะ</label>{{ c.status or '-' }}</div>
+      <div><label>เลขคดีอาญา (thaipoliceonline)</label>{{ c.tpo_criminal_no or '-' }}</div>
+      <div><label>เบอร์โทรศัพท์ผู้เสียหาย</label>{{ c.phone or '-' }}</div>
+      {% if c.detail %}<div class="wide"><label>รายละเอียด</label>{{ c.detail }}</div>{% endif %}
+    </div>
+    <p class="hint">ข้อมูลส่วนนี้อัปเดตจากการนำเข้าไฟล์ thaipoliceonline</p>
+    {% else %}
+    <div class="grid">
+      <div><label>ผู้เสียหาย</label><input type="text" name="victim" value="{{ c.victim or '' }}"></div>
+      <div><label>ความเสียหาย (บาท)</label><input type="text" name="damage" value="{{ c.damage if c.damage is not none else '' }}"></div>
+    </div>
+    {% endif %}
+  </fieldset>
+
+  <fieldset><legend>1.2 สอบปากคำ (CCMS)</legend>
+    <label style="font-weight:400"><input type="checkbox" name="statement_taken" value="1" {{ 'checked' if c.statement_taken }}> ดำเนินการสอบปากคำแล้ว (CCMS: มีสำนวนแล้ว)</label>
+  </fieldset>
+
+  <fieldset><legend>1.3 / 1.4 คดีอาญา (ระบบ C.)</legend>
+    <div class="grid">
+      <div><label>เลขคดีอาญา</label><input type="text" name="criminal_no" value="{{ c.criminal_no or '' }}" placeholder="323/2569"></div>
+      <div><label>ผู้ร้องทุกข์ (ตามระบบ C.)</label><input type="text" name="complainant" value="{{ c.complainant or '' }}" placeholder="{{ c.victim or '' }}"></div>
+      <div><label>วันที่รับคำร้องทุกข์</label><input type="datetime-local" name="complaint_date" value="{{ c.complaint_date or '' }}"></div>
+      <div><label>สถานะในระบบ C.</label>
+        <input type="text" name="c_status" list="c-statuses" value="{{ c.c_status or '' }}"></div>
+      <div><label>สถานะจริงของสำนวน</label>
+        <input type="text" name="actual_status" list="c-statuses" value="{{ c.actual_status or '' }}">
+        <div class="hint">ถ้าต่างจากระบบ C. จะเข้ารายการข้อ 1.4</div></div>
+      <div class="wide"><label>การดำเนินการ (ข้อ 1.4)</label>
+        <input type="text" name="c_action" value="{{ c.c_action or '' }}" placeholder="{{ report.DEFAULT_ACTION }}"></div>
+    </div>
+    <datalist id="c-statuses">{% for s in report.C_STATUSES %}<option value="{{ s }}">{% endfor %}</datalist>
+  </fieldset>
+
+  <fieldset><legend>1.5 สำนวนค้างเกิน 6 เดือน</legend>
+    <div class="grid">
+      <div><label>ศาล</label><input type="text" name="court" value="{{ c.court or '' }}" placeholder="ศาลจังหวัดลำปาง"></div>
+      <div><label>เหตุผลที่ค้าง</label><input type="text" name="backlog_reason" list="reasons" value="{{ c.backlog_reason or '' }}">
+        <datalist id="reasons">{% for r in report.REASONS %}<option value="{{ r }}">{% endfor %}</datalist></div>
+      <div class="wide"><label>รายละเอียด</label><textarea name="backlog_detail">{{ c.backlog_detail or '' }}</textarea></div>
+      <div class="wide"><label>แนวทางเร่งรัด</label><input type="text" name="backlog_plan" value="{{ c.backlog_plan or '' }}"></div>
+      <div class="wide"><label>หลักฐานที่แนบ</label><input type="text" name="backlog_evidence" value="{{ c.backlog_evidence or '' }}"></div>
+    </div>
+    <details style="margin-top:12px"><summary>ค่าที่ใช้แสดงในข้อ 1.5 (กรอกเฉพาะเมื่อต่างจากข้อมูลหลัก)</summary>
+    <div class="grid" style="margin-top:10px">
+      <div><label>ผู้เสียหาย</label><input type="text" name="backlog_victim" value="{{ c.backlog_victim or '' }}" placeholder="{{ c.victim or c.complainant or '' }}"></div>
+      <div><label>ความเสียหาย (บาท)</label><input type="text" name="backlog_damage" value="{{ c.backlog_damage if c.backlog_damage is not none else '' }}" placeholder="{{ c.damage|money }}"></div>
+      <div><label>วันที่รับคำร้องทุกข์</label><input type="date" name="backlog_date" value="{{ c.backlog_date or '' }}"></div>
+    </div></details>
+    <p class="hint">จะแสดงในข้อ 1.5 เมื่อสถานะจริงเป็น "ระหว่างสอบสวน" และรับคำร้องทุกข์มาเกิน 6 เดือน</p>
+  </fieldset>
+
+  {% if g.user.role == 'admin' %}
+  <fieldset><legend>เจ้าของข้อมูล</legend>
+    <select name="owner_id">{% for o in owners %}<option value="{{ o.id }}" {{ 'selected' if o.id == c.owner_id }}>{{ o.name }}</option>{% endfor %}</select>
+    <p class="hint">ถ้าย้ายเจ้าของ การนำเข้าไฟล์แบบแยกอัตโนมัติครั้งต่อไปจะไม่ย้ายคดีนี้กลับ</p>
+  </fieldset>
+  {% endif %}
+
+  <div class="row">
+    <button class="btn primary">บันทึก</button>
+    <a class="btn" href="{{ back or url_for('owner_view', owner_id=owner.id) }}">ยกเลิก</a>
+  </div>
+</form>
+<form method="post" action="{{ url_for('case_delete', case_pk=c.id) }}" style="margin-top:28px" data-confirm="ลบ {{ c.case_id }} ออกจากระบบ?">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <button class="btn small danger">ลบ Case ID นี้</button>
+</form>
+{% endblock %}
