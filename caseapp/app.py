@@ -74,6 +74,8 @@ def login_required(view):
     @wraps(view)
     def wrapped(*a, **kw):
         if g.user is None:
+            if request.path.startswith("/import/"):
+                return {"error": "หมดเวลาเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่แล้วนำเข้าอีกครั้ง"}, 401
             return redirect(url_for("login", next=request.path))
         return view(*a, **kw)
     return wrapped
@@ -154,6 +156,13 @@ def _register(app):
         if request.endpoint not in ("setup", "static"):
             if get_db().execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
                 return redirect(url_for("setup"))
+
+    @app.after_request
+    def no_store(resp):
+        # หน้าเว็บมีข้อมูลคดี และต้องได้โค้ดล่าสุดเสมอหลัง deploy (กันเบราว์เซอร์ใช้หน้าเก่าจาก cache)
+        if resp.mimetype == "text/html":
+            resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.context_processor
     def inject():
@@ -447,7 +456,8 @@ def _register(app):
                 label = "รายงานเดิม (เอกสารแนบ)"
             else:
                 raise importer.ImportError_(
-                    "ไม่รู้จักรูปแบบไฟล์ ต้องเป็นไฟล์ export thaipoliceonline หรือไฟล์รายงานเอกสารแนบ")
+                    "ไม่รู้จักรูปแบบไฟล์ ต้องเป็นไฟล์ export thaipoliceonline (มีคอลัมน์ 'เลขรับแจ้ง' และ "
+                    "'พนักงานสอบสวน') หรือไฟล์รายงานเอกสารแนบ — พบ " + importer.first_row_text(wb))
             names = {o["id"]: o["name"] for o in db.execute("SELECT id, name FROM owners")}
             summary = {"kind": label, "rows": res["rows"], "created": res["created"],
                        "updated": res["updated"], "locked": res["locked"],
@@ -498,11 +508,16 @@ def _register(app):
                 or not data or len(data) > UPLOAD_CHUNK):
             return {"error": "ข้อมูลส่วนของไฟล์ไม่ถูกต้อง"}, 400
         db = get_db()
-        db.execute("DELETE FROM uploads WHERE token = ? AND seq = ? AND user_id = ?",
-                   (token, seq, g.user["id"]))
-        db.execute("INSERT INTO uploads (token, user_id, seq, data) VALUES (?, ?, ?, ?)",
-                   (token, g.user["id"], seq, data))
-        db.commit()
+        try:
+            db.execute("DELETE FROM uploads WHERE token = ? AND seq = ? AND user_id = ?",
+                       (token, seq, g.user["id"]))
+            db.execute("INSERT INTO uploads (token, user_id, seq, data) VALUES (?, ?, ?, ?)",
+                       (token, g.user["id"], seq, data))
+            db.commit()
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            app.logger.exception("chunk upload failed")
+            return {"error": f"บันทึกส่วนของไฟล์ไม่สำเร็จ ({type(exc).__name__}: {str(exc)[:300]})"}, 500
         return {"ok": True}
 
     @app.route("/import/finish", methods=["POST"])
@@ -530,6 +545,9 @@ def _register(app):
                                     _owner_mode())
         except importer.ImportError_ as exc:
             return {"error": str(exc)}, 400
+        except Exception as exc:  # noqa: BLE001 - แจ้งสาเหตุให้ผู้ใช้เห็น และบันทึกใน log
+            app.logger.exception("import failed: %s", request.form.get("filename"))
+            return {"error": f"นำเข้าไม่สำเร็จ ({type(exc).__name__}: {str(exc)[:300]})"}, 500
         return {"url": url_for("import_result", import_id=import_id)}
 
     @app.route("/imports/<int:import_id>")
