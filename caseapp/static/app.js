@@ -166,6 +166,42 @@
     document.addEventListener('visibilitychange', function () { if (!document.hidden && !reduce) requestAnimationFrame(frame); });
   }
 
+  // ---------------------------------------------------------------- ดาวน์โหลด: ถามชื่อผู้ดาวน์โหลดทุกครั้ง
+  var dlg = document.getElementById('dl-dialog');
+  if (dlg && typeof dlg.showModal === 'function') {
+    var dlName = document.getElementById('dl-name'), pending = null;
+    document.addEventListener('click', function (e) {
+      var a = e.target.closest && e.target.closest('a[data-download]');
+      if (!a || e.button !== 0) return;
+      e.preventDefault();
+      pending = a.getAttribute('href');
+      var remembered = '';
+      try { remembered = localStorage.getItem('dl-name') || ''; } catch (_) {}
+      dlName.value = remembered || a.dataset.name || '';
+      dlg.showModal();
+      setTimeout(function () { dlName.focus(); dlName.select(); }, 30);
+    });
+    document.getElementById('dl-cancel').onclick = function () { dlg.close(); };
+    document.getElementById('dl-form').addEventListener('submit', function (e) {
+      var name = dlName.value.replace(/\s+/g, ' ').trim();
+      if (name.length < 2) { e.preventDefault(); dlName.focus(); return; }
+      try { localStorage.setItem('dl-name', name); } catch (_) {}
+      if (pending) window.location = pending + (pending.indexOf('?') === -1 ? '?' : '&') + 'by=' + encodeURIComponent(name);
+    });
+  }
+
+  // ---------------------------------------------------------------- คัดลอกข้อความ (ลิงก์ส่วนตัว)
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-copy]');
+    if (!b) return;
+    var src = document.querySelector(b.dataset.copy);
+    if (!src) return;
+    var text = src.value || src.textContent;
+    var done = function () { var t = b.textContent; b.textContent = 'คัดลอกแล้ว ✓'; setTimeout(function () { b.textContent = t; }, 1600); };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () { src.select && src.select(); });
+    else { src.select && src.select(); document.execCommand('copy'); done(); }
+  });
+
   // ให้หน้าอื่นใช้แถบโหลด/แจ้งเตือนได้
   window.UI = {startBar: startBar, endBar: endBar};
 })();

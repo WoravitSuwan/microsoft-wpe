@@ -1,44 +1,44 @@
 {% extends "base.html" %}
 {% from "_emblem.html" import emblem %}
 {% block content %}
-{% set tot = namespace(cases=0, stmt=0, crim=0, users=0) %}
-{% for o in owners %}{% set tot.cases = tot.cases + (o.n_tpo or 0) %}{% set tot.stmt = tot.stmt + (o.n_stmt or 0) %}{% set tot.crim = tot.crim + (o.n_crim or 0) %}{% if o.users %}{% set tot.users = tot.users + 1 %}{% endif %}{% endfor %}
+{% set tot = namespace(cases=0, ws=0, managed=0) %}
+{% for o in owners %}{% set tot.cases = tot.cases + (o.n_tpo or 0) %}{% if o.token %}{% set tot.ws = tot.ws + 1 %}{% else %}{% set tot.managed = tot.managed + 1 %}{% endif %}{% endfor %}
 <section class="hero">
   <div class="grid-bg"></div>
   {{ emblem("hero", "emblem hero-emblem") }}
-  <div class="eyebrow">{{ unit_short }} · ภาพรวมทั้งกอง</div>
-  <h1>เจ้าของข้อมูล (พนักงานสอบสวน)</h1>
-  <p class="sub">แต่ละคนเป็นเจ้าของคดีของตัวเอง · นำเข้าไฟล์ thaipoliceonline แล้วเลือกได้ว่าจะนำเข้าคดีของใคร</p>
+  <div class="eyebrow">{{ unit_short }} · ภาพรวมทั้งกอง (ผู้ดูแลระบบ)</div>
+  <h1>รายงานทั้งหมดในระบบ</h1>
+  <p class="sub">ผู้ใช้ทั่วไปเปิดลิงก์แล้วใช้ได้เลย แต่ละเบราว์เซอร์มีชุดข้อมูลของตัวเอง · ผู้ดูแลเห็นทุกชุดและบันทึกการใช้งาน</p>
   <div class="row" style="margin-top:16px">
-    <a class="btn primary" href="{{ url_for('import_view') }}">นำเข้าไฟล์ Excel</a>
-    <a class="btn" href="{{ url_for('users') }}">ผู้ใช้งาน / เปิดรับสมัคร</a>
+    <a class="btn primary" href="{{ url_for('admin_logs') }}">บันทึกการใช้งาน</a>
+    <a class="btn" href="{{ url_for('import_view') }}">นำเข้าไฟล์ Excel</a>
+    <a class="btn" href="{{ url_for('users') }}">ผู้ดูแลระบบ / ล้างข้อมูล</a>
   </div>
 </section>
 <div class="stats">
-  <div class="stat"><div class="k">พนักงานสอบสวน</div><div class="v">{{ owners|length }}</div></div>
-  <div class="stat"><div class="k">มีบัญชีผู้ใช้แล้ว</div><div class="v">{{ tot.users }}</div></div>
+  <div class="stat"><div class="k">ชุดข้อมูลส่วนตัวของผู้ใช้</div><div class="v">{{ tot.ws }}</div></div>
+  <div class="stat"><div class="k">รายงานที่ผู้ดูแลนำเข้า</div><div class="v">{{ tot.managed }}</div></div>
   <div class="stat"><div class="k">Case ID ทั้งหมด (1.1)</div><div class="v">{{ tot.cases }}</div></div>
-  <div class="stat"><div class="k">สอบปากคำแล้ว (1.2)</div><div class="v">{{ tot.stmt }}</div></div>
-  <div class="stat"><div class="k">รับเลขคดีอาญาแล้ว (1.3)</div><div class="v">{{ tot.crim }}</div></div>
+  <a class="stat" href="{{ url_for('admin_logs', action='download') }}"><div class="k">ดาวน์โหลดแล้ว (ครั้ง)</div><div class="v">{{ downloads }}</div></a>
 </div>
 
 {% if owners %}
 <div class="tbl-wrap">
 <table class="data">
-  <thead><tr><th><input type="checkbox" id="sel-all" aria-label="เลือกทั้งหมด"></th><th>เจ้าของข้อมูล</th><th>ตำแหน่ง/สังกัด</th><th>Case ID (1.1)</th><th>สอบปากคำแล้ว (1.2)</th><th>คดีอาญา (1.3)</th><th>บัญชีผู้ใช้</th><th></th></tr></thead>
+  <thead><tr><th><input type="checkbox" id="sel-all" aria-label="เลือกทั้งหมด"></th><th>รายงาน</th><th>ประเภท</th><th>Case ID (1.1)</th><th>สอบปากคำ (1.2)</th><th>คดีอาญา (1.3)</th><th>ใช้งานล่าสุด</th><th></th></tr></thead>
   <tbody>
   {% for o in owners %}
     <tr>
-      <td><input type="checkbox" name="ids" value="{{ o.id }}" form="bulk" class="sel" aria-label="เลือก {{ o.name }}"></td>
-      <td><a href="{{ url_for('owner_view', owner_id=o.id) }}"><b>{{ o.name }}</b></a></td>
-      <td>{{ o.position }}</td>
+      <td><input type="checkbox" name="ids" value="{{ o.id }}" form="bulk" class="sel" aria-label="เลือก {{ owner_label(o) }}"></td>
+      <td><a href="{{ url_for('owner_view', owner_id=o.id) }}"><b>{{ owner_label(o) }}</b></a>{% if o.position %}<div class="hint" style="margin:0">{{ o.position }}</div>{% endif %}</td>
+      <td>{% if o.token %}<span class="badge muted kind">ส่วนตัว</span>{% else %}<span class="badge kind">ผู้ดูแลนำเข้า</span>{% endif %}</td>
       <td class="num">{{ o.n_tpo or 0 }}</td>
       <td class="num">{{ o.n_stmt or 0 }}</td>
       <td class="num">{{ o.n_crim or 0 }}</td>
-      <td>{% if o.users %}{{ o.users }}{% else %}<span class="badge muted">ยังไม่มี</span>{% endif %}</td>
+      <td class="nowrap">{{ (o.last_seen or o.created_at or '')[:16] }}</td>
       <td class="nowrap">
-        <a class="btn small" href="{{ url_for('owner_export', owner_id=o.id) }}">ดาวน์โหลด Excel</a>
-        <form method="post" action="{{ url_for('owners_admin') }}" style="display:inline" data-confirm="ลบ {{ o.name }} และคดีทั้งหมด {{ o.n_cases }} รายการ?">
+        <a class="btn small" href="{{ url_for('owner_export', owner_id=o.id) }}" data-download data-name="{{ o.name }}">ดาวน์โหลด</a>
+        <form method="post" action="{{ url_for('owners_admin') }}" style="display:inline" data-confirm="ลบ {{ owner_label(o) }} และคดีทั้งหมด {{ o.n_cases }} รายการ?">
           <input type="hidden" name="csrf" value="{{ csrf_token() }}">
           <input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="{{ o.id }}">
           <button class="btn small danger">ลบ</button>
@@ -50,10 +50,9 @@
 </table>
 </div>
 <form method="post" action="{{ url_for('owners_admin') }}" id="bulk" class="row" style="margin-top:10px"
-      data-confirm="ลบเจ้าของที่เลือกพร้อมคดีทั้งหมดของคนเหล่านั้น? (ย้อนกลับไม่ได้)">
+      data-confirm="ลบรายงานที่เลือกพร้อมคดีทั้งหมด? (ย้อนกลับไม่ได้)">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_many">
-  <button class="btn small danger" id="bulk-btn" disabled>ลบเจ้าของที่เลือก</button>
-  <span class="hint">ใช้ลบคนที่นำเข้ามาโดยไม่ต้องการ</span>
+  <button class="btn small danger" id="bulk-btn" disabled>ลบรายงานที่เลือก</button>
 </form>
 <script>
 (function () {
@@ -61,18 +60,18 @@
   var boxes = Array.from(document.querySelectorAll('input.sel'));
   function upd() {
     var n = boxes.filter(function (b) { return b.checked; }).length;
-    btn.disabled = n === 0; btn.textContent = n ? 'ลบเจ้าของที่เลือก (' + n + ' คน)' : 'ลบเจ้าของที่เลือก';
+    btn.disabled = n === 0; btn.textContent = n ? 'ลบรายงานที่เลือก (' + n + ')' : 'ลบรายงานที่เลือก';
   }
   all.addEventListener('change', function () { boxes.forEach(function (b) { b.checked = all.checked; }); upd(); });
   boxes.forEach(function (b) { b.addEventListener('change', upd); });
 })();
 </script>
 {% else %}
-<div class="card empty">ยังไม่มีข้อมูล — เริ่มจาก <a href="{{ url_for('import_view') }}">นำเข้าไฟล์ Excel</a></div>
+<div class="card empty">ยังไม่มีข้อมูล — ส่งลิงก์เว็บให้คนในกองใช้งานได้เลย หรือ <a href="{{ url_for('import_view') }}">นำเข้าไฟล์ Excel</a></div>
 {% endif %}
 
 <details class="card" style="margin-top:18px">
-  <summary>เพิ่มเจ้าของข้อมูลเอง</summary>
+  <summary>เพิ่มรายงาน (ผู้ดูแลจัดการ) เอง</summary>
   <form method="post" action="{{ url_for('owners_admin') }}" class="grid" style="margin-top:12px">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
     <div><label>ยศ ชื่อ สกุล</label><input type="text" name="name" required placeholder="พ.ต.ต.อำพล ทองอร่าม"></div>
@@ -81,15 +80,12 @@
   </form>
 </details>
 
-{% if imports %}
-<h2>ประวัติการนำเข้าล่าสุด</h2>
+<h2>การใช้งานล่าสุด <a href="{{ url_for('admin_logs') }}" style="font-size:.9rem;font-weight:400">ดูทั้งหมด →</a></h2>
 <div class="tbl-wrap"><table class="data">
-  <thead><tr><th>เวลา</th><th>ไฟล์</th><th>ประเภท</th><th>ผู้นำเข้า</th><th>ผลลัพธ์</th></tr></thead>
-  <tbody>{% for i in imports %}{% set s = loads(i.summary) %}
-    <tr><td class="nowrap">{{ (i.created_at or "")[:16] }}</td><td>{{ i.filename }}</td><td>{{ s.kind }}</td><td>{{ i.username }}</td>
-      <td>{{ s.rows }} แถว · ใหม่ {{ s.created }} · อัปเดต {{ s.updated }}{% if s.locked %} · ข้าม {{ s.locked }}{% endif %}
-        — {% for n, c in s.owners.items() %}{{ n }} ({{ c }}){% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
-  {% endfor %}</tbody>
+  <thead><tr><th>เวลา</th><th>การกระทำ</th><th>ผู้กระทำ</th><th>รายละเอียด</th><th>IP</th></tr></thead>
+  <tbody>{% for r in recent %}
+    <tr><td class="nowrap">{{ r.created_at }}</td><td class="nowrap"><span class="badge">{{ actions.get(r.action, r.action) }}</span></td>
+      <td>{{ r.actor or '' }}</td><td class="clip">{{ r.detail or '' }}</td><td><code>{{ r.ip or '' }}</code></td></tr>
+  {% else %}<tr><td colspan="5" class="empty">ยังไม่มีบันทึก</td></tr>{% endfor %}</tbody>
 </table></div>
-{% endif %}
 {% endblock %}

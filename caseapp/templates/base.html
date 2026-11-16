@@ -21,28 +21,31 @@
       {{ emblem("hdr") }}
       <span><span class="brand-title">ระบบรายงานคดีและ Case ID</span><span class="brand-unit">{{ unit_short }}</span></span>
     </a>
-    {% if g.user %}
     <nav>
-      {% if g.user.role == 'admin' %}
+      {% if is_admin %}
         <a href="{{ url_for('index') }}" class="{{ 'on' if request.endpoint == 'index' }}">ภาพรวมทั้งกอง</a>
-      {% elif g.user.owner_id %}
-        <a href="{{ url_for('owner_view', owner_id=g.user.owner_id) }}" class="{{ 'on' if request.endpoint == 'owner_view' }}">รายงานของฉัน</a>
-      {% endif %}
-      <a href="{{ url_for('import_view') }}" class="{{ 'on' if request.endpoint in ('import_view', 'import_result') }}">นำเข้าไฟล์ Excel</a>
-      {% if g.user.role == 'admin' %}
-        <a href="{{ url_for('users') }}" class="{{ 'on' if request.endpoint == 'users' }}">ผู้ใช้งาน</a>
+        <a href="{{ url_for('import_view') }}" class="{{ 'on' if request.endpoint in ('import_view', 'import_result') }}">นำเข้าไฟล์ Excel</a>
+        <a href="{{ url_for('admin_logs') }}" class="{{ 'on' if request.endpoint == 'admin_logs' }}">บันทึกการใช้งาน</a>
+        <a href="{{ url_for('users') }}" class="{{ 'on' if request.endpoint == 'users' }}">ผู้ดูแลระบบ</a>
+      {% else %}
+        {% if ws %}<a href="{{ url_for('owner_view', owner_id=ws.id) }}" class="{{ 'on' if request.endpoint == 'owner_view' }}">รายงานของฉัน</a>{% endif %}
+        <a href="{{ url_for('import_view') }}" class="{{ 'on' if request.endpoint in ('import_view', 'import_result') }}">นำเข้าไฟล์ Excel</a>
       {% endif %}
     </nav>
     <div class="who">
-      <span class="avatar">{{ (g.user.display_name or g.user.username) | initial }}</span>
-      <span class="who-name">{{ g.user.display_name or g.user.username }}<small>{{ 'ผู้ดูแลระบบ' if g.user.role == 'admin' else 'พนักงานสอบสวน' }}</small></span>
-      <a href="{{ url_for('password') }}">รหัสผ่าน</a>
-      <form method="post" action="{{ url_for('logout') }}" style="margin:0">
-        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-        <button type="submit">ออกจากระบบ</button>
-      </form>
+      {% if is_admin %}
+        <span class="avatar">{{ (g.user.display_name or g.user.username) | initial }}</span>
+        <span class="who-name">{{ g.user.display_name or g.user.username }}<small>ผู้ดูแลระบบ</small></span>
+        <a href="{{ url_for('password') }}">รหัสผ่าน</a>
+        <form method="post" action="{{ url_for('logout') }}" style="margin:0">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <button type="submit">ออกจากระบบ</button>
+        </form>
+      {% else %}
+        {% if ws and ws.name %}<span class="who-name">{{ ws.name }}<small>ชุดข้อมูลของเบราว์เซอร์นี้</small></span>{% endif %}
+        <a class="admin-login" href="{{ url_for('login') }}">🔒 เข้าสู่ระบบผู้ดูแล</a>
+      {% endif %}
     </div>
-    {% endif %}
   </div>
 </header>
 {% endblock %}
@@ -55,6 +58,18 @@
   {% block content %}{% endblock %}
 </main>
 <footer class="foot">ระบบรายงานข้อมูลคดีและ Case ID · <b>{{ unit_full }}</b> · ใช้งานภายในหน่วยเท่านั้น</footer>
+<dialog id="dl-dialog" class="dl-dialog">
+  <form method="dialog" id="dl-form">
+    <h2>ดาวน์โหลด Excel</h2>
+    <p class="sub">กรุณากรอกชื่อผู้ดาวน์โหลด (ยศ ชื่อ สกุล) — ระบบบันทึกไว้ทุกครั้งที่ดาวน์โหลด</p>
+    <label for="dl-name">ชื่อผู้ดาวน์โหลด</label>
+    <input type="text" id="dl-name" required minlength="2" maxlength="120" autocomplete="name" placeholder="เช่น ว่าที่ ร.ต.ท.ชัชวาลย์ ญะวิญชาญ">
+    <div class="row" style="margin-top:16px;justify-content:flex-end">
+      <button type="button" class="btn" value="cancel" id="dl-cancel">ยกเลิก</button>
+      <button type="submit" class="btn primary" id="dl-go">⬇ ดาวน์โหลด</button>
+    </div>
+  </form>
+</dialog>
 <script src="{{ url_for('static', filename='app.js') }}?v={{ asset_v }}"></script>
 {% block scripts %}{% endblock %}
 </body>

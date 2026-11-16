@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}ดาวน์โหลด Excel · {{ unit_short }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:520px;margin:30px auto">
+  <h1>ดาวน์โหลด Excel</h1>
+  <p class="sub">รายงานของ <b>{{ owner_label(owner) }}</b> — กรุณากรอกชื่อผู้ดาวน์โหลด (ระบบบันทึกไว้ทุกครั้ง)</p>
+  {% if error %}<div class="flash error">กรุณากรอกชื่ออย่างน้อย 2 ตัวอักษร</div>{% endif %}
+  <form method="get" action="{{ url_for('owner_export', owner_id=owner.id) }}">
+    <p><label>ชื่อผู้ดาวน์โหลด (ยศ ชื่อ สกุล)</label>
+      <input type="text" name="by" value="{{ suggest }}" required minlength="2" maxlength="120" autofocus></p>
+    <div class="row">
+      <button class="btn primary">⬇ ดาวน์โหลด</button>
+      <a class="btn" href="{{ url_for('owner_view', owner_id=owner.id) }}">ยกเลิก</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
