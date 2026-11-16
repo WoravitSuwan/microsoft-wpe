@@ -2,9 +2,9 @@
 {% block title %}{{ c.case_id }} · แก้ไข{% endblock %}
 {% block content %}
 <h1>{% if c.no_case_id %}คดีอาญา {{ c.criminal_no }} <span class="badge muted">ยังไม่มี Case ID</span>{% else %}{{ c.case_id }}{% endif %}</h1>
-<p class="sub">เจ้าของข้อมูล: <a href="{{ url_for('owner_view', owner_id=owner.id) }}">{{ owner.name }}</a>
+<p class="sub">รายงาน: <a href="{{ url_for('owner_view', owner_id=owner.id) }}">{{ owner_label(owner) }}</a>
   {% if c.in_tpo %} · <span class="badge">อยู่ในรายการ 1.1</span>{% else %} · <span class="badge warn">ไม่อยู่ในรายการ 1.1</span>{% endif %}
-  {% if c.owner_locked %} · <span class="badge muted">กำหนดเจ้าของเอง</span>{% endif %}</p>
+</p>
 
 <form method="post">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
@@ -77,10 +77,10 @@
     <p class="hint">จะแสดงในข้อ 1.5 เมื่อสถานะจริงเป็น "ระหว่างสอบสวน" และรับคำร้องทุกข์มาเกิน 6 เดือน</p>
   </fieldset>
 
-  {% if g.user.role == 'admin' %}
+  {% if is_admin %}
   <fieldset><legend>เจ้าของข้อมูล</legend>
-    <select name="owner_id">{% for o in owners %}<option value="{{ o.id }}" {{ 'selected' if o.id == c.owner_id }}>{{ o.name }}</option>{% endfor %}</select>
-    <p class="hint">ถ้าย้ายเจ้าของ การนำเข้าไฟล์แบบแยกอัตโนมัติครั้งต่อไปจะไม่ย้ายคดีนี้กลับ</p>
+    <select name="owner_id">{% for o in owners %}<option value="{{ o.id }}" {{ 'selected' if o.id == c.owner_id }}>{{ owner_label(o) }}{{ ' (ชุดข้อมูลส่วนตัว)' if o.token }}</option>{% endfor %}</select>
+    <p class="hint">ย้ายคดีนี้ไปอยู่ในรายงานอื่น</p>
   </fieldset>
   {% endif %}
 

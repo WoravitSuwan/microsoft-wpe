@@ -471,3 +471,16 @@ body.auth .flash.warn { color: #fcd34d; border-color: rgba(252, 211, 77, .35); }
 .first-run { margin: 6px 0 16px; padding: 12px 14px; border-radius: 12px; font-size: .92rem; line-height: 1.6; color: #f5e6bd;
   background: linear-gradient(135deg, rgba(201, 162, 75, .18), rgba(34, 211, 238, .08)); border: 1px solid rgba(232, 205, 133, .45); }
 .first-run b { color: #fff; }
+
+/* ---------------------------------------------------------------- admin login button + download dialog */
+.who a.admin-login { border: 1px solid rgba(232, 205, 133, .45); color: var(--gold-2); padding: 6px 12px; border-radius: 999px; white-space: nowrap; }
+.who a.admin-login:hover { background: rgba(232, 205, 133, .14); color: #fff; }
+.dl-dialog { border: 0; border-radius: 18px; padding: 0; width: min(460px, calc(100vw - 32px)); box-shadow: var(--shadow-lg); }
+.dl-dialog::backdrop { background: rgba(5, 13, 28, .55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.dl-dialog[open] { animation: rise .35s var(--ease); }
+.dl-dialog form { padding: 22px 22px 18px; position: relative; overflow: hidden; }
+.dl-dialog form::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 4px; background: linear-gradient(90deg, var(--gold), var(--cyan)); }
+.dl-dialog h2 { margin: 0 0 6px; }
+.private-link { display: flex; gap: 8px; }
+.private-link input { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; }
+.kind { font-size: .75rem; }

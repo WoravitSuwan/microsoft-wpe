@@ -1,70 +1,49 @@
 {% extends "base.html" %}
+{% block title %}ผู้ดูแลระบบ · {{ unit_short }}{% endblock %}
 {% block content %}
-<h1>ผู้ใช้งาน</h1>
-<p class="sub">ผูกบัญชีกับเจ้าของข้อมูล เพื่อให้พนักงานสอบสวนแต่ละคนเห็นและแก้ไขได้เฉพาะคดีของตัวเอง · ผู้ดูแลระบบเห็นทุกเจ้าของ</p>
+<h1>ผู้ดูแลระบบ</h1>
+<p class="sub">ผู้ใช้ทั่วไปไม่ต้องมีบัญชี (เปิดลิงก์แล้วใช้ได้เลย) — บัญชีในหน้านี้คือผู้ดูแลระบบ เข้าสู่ระบบได้จากปุ่ม "เข้าสู่ระบบผู้ดูแล" บนเว็บ</p>
 <div class="tbl-wrap" style="margin-bottom:18px"><table class="data">
-  <thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>สิทธิ์</th><th>เจ้าของข้อมูล</th><th>รหัสผ่านใหม่</th><th></th></tr></thead>
+  <thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>ตั้งรหัสผ่านใหม่</th><th></th></tr></thead>
   <tbody>{% for u in users %}{% set f = 'u' ~ u.id %}
     <tr>
-      <td><b>{{ u.username }}</b></td>
+      <td><b>{{ u.username }}</b>{% if u.id == g.user.id %} <span class="badge ok">คุณ</span>{% endif %}</td>
       <td><input form="{{ f }}" type="text" name="display_name" value="{{ u.display_name or '' }}"></td>
-      <td><select form="{{ f }}" name="role"><option value="officer" {{ 'selected' if u.role=='officer' }}>พนักงานสอบสวน</option><option value="admin" {{ 'selected' if u.role=='admin' }}>ผู้ดูแลระบบ</option></select></td>
-      <td><select form="{{ f }}" name="owner_id"><option value="">— ไม่ผูก —</option>{% for o in owners %}<option value="{{ o.id }}" {{ 'selected' if o.id == u.owner_id }}>{{ o.name }}</option>{% endfor %}</select></td>
-      <td><input form="{{ f }}" type="password" name="password" placeholder="เว้นว่าง = ไม่เปลี่ยน"></td>
+      <td><input form="{{ f }}" type="password" name="password" placeholder="เว้นว่าง = ไม่เปลี่ยน" autocomplete="new-password"></td>
       <td class="nowrap"><button form="{{ f }}" class="btn small" name="action" value="update">บันทึก</button>
-        <button form="{{ f }}" class="btn small danger" name="action" value="delete" onclick="return confirm('ลบผู้ใช้ {{ u.username }}?')">ลบ</button></td>
+        {% if u.id != g.user.id %}<button form="{{ f }}" class="btn small danger" name="action" value="delete" onclick="return confirm('ลบผู้ดูแล {{ u.username }}?')">ลบ</button>{% endif %}</td>
     </tr>
   {% endfor %}</tbody>
 </table></div>
 {% for u in users %}<form id="u{{ u.id }}" method="post"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="id" value="{{ u.id }}"></form>{% endfor %}
 <form method="post" class="card">
-  <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="registration">
-  <h2 style="margin-top:0">ให้พนักงานสอบสวนสมัครสมาชิกเอง</h2>
-  {% if register_code %}
-    <p><span class="badge ok">เปิดรับสมัคร</span> ส่งลิงก์และรหัสนี้ให้คนในหน่วย (ทางช่องทางภายใน ไม่โพสต์สาธารณะ)</p>
-    <p>ลิงก์สมัคร: <code>{{ url_for('register', _external=True) }}</code></p>
-  {% else %}
-    <p><span class="badge muted">ปิดรับสมัคร</span> ตั้งรหัสลงทะเบียนเพื่อเปิดให้สมัครเอง</p>
-  {% endif %}
-  <div class="row">
-    <input type="text" name="code" value="{{ register_code }}" placeholder="เช่น {{ suggest_code }}" style="max-width:260px" autocomplete="off">
-    <button class="btn primary">บันทึก</button>
-    {% if register_code %}<button class="btn danger" name="code" value="">ปิดรับสมัคร</button>{% endif %}
-  </div>
-  <p class="hint">ผู้สมัครกรอก ยศ ชื่อ สกุล ให้ตรงกับคอลัมน์ "พนักงานสอบสวน" ระบบจะผูกบัญชีกับข้อมูลของชื่อนั้น (1 ชื่อ 1 บัญชี) ·
-    ลืมรหัสผ่าน: ตั้งรหัสผ่านใหม่ให้ได้ในตารางด้านบน · เปลี่ยนรหัสลงทะเบียนเมื่อมีคนย้ายออก</p>
-</form>
-<form method="post" class="card">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
-  <h2 style="margin-top:0">เพิ่มผู้ใช้</h2>
+  <h2 style="margin-top:0">เพิ่มผู้ดูแลระบบ</h2>
   <div class="grid">
-    <div><label>ชื่อผู้ใช้</label><input type="text" name="username" required></div>
+    <div><label>ชื่อผู้ใช้ (ภาษาอังกฤษ/ตัวเลข)</label><input type="text" name="username" required pattern="[A-Za-z0-9_.@-]{3,40}" autocapitalize="none"></div>
     <div><label>ชื่อที่แสดง</label><input type="text" name="display_name"></div>
-    <div><label>รหัสผ่าน</label><input type="password" name="password" required minlength="6"></div>
-    <div><label>สิทธิ์</label><select name="role"><option value="officer">พนักงานสอบสวน</option><option value="admin">ผู้ดูแลระบบ</option></select></div>
-    <div><label>เจ้าของข้อมูล</label><select name="owner_id"><option value="">— ไม่ผูก —</option>{% for o in owners %}<option value="{{ o.id }}">{{ o.name }}</option>{% endfor %}</select></div>
+    <div><label>รหัสผ่าน (อย่างน้อย 6 ตัว)</label><input type="password" name="password" required minlength="6" autocomplete="new-password"></div>
   </div>
-  <p><button class="btn primary">เพิ่มผู้ใช้</button></p>
+  <p><button class="btn primary">เพิ่มผู้ดูแล</button></p>
 </form>
 
 <form method="post" action="{{ url_for('admin_reset') }}" class="card danger-zone" id="reset"
-      data-confirm="ยืนยันล้างข้อมูลทั้งระบบ? คดี บัญชีผู้ใช้ และประวัติทั้งหมดจะถูกลบ กู้คืนไม่ได้">
+      data-confirm="ยืนยันล้างข้อมูลทั้งระบบ? คดีและชุดข้อมูลของทุกคนจะถูกลบ กู้คืนไม่ได้">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
   <div class="dz-head">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5M12 18v.01"/></svg>
     <div>
       <h2>ล้างข้อมูลทั้งระบบ</h2>
-      <p class="sub">ใช้เมื่อต้องการเริ่มใหม่ — ลบคดีของทุกคน รายชื่อเจ้าของข้อมูล ประวัติการนำเข้า ไฟล์ที่ค้าง
-        บัญชีผู้ใช้อื่นทั้งหมด และปิดรับสมัคร (รหัสลงทะเบียนเดิมใช้ไม่ได้)</p>
+      <p class="sub">ลบคดีและชุดข้อมูลของทุกคน ประวัติการนำเข้า ไฟล์ที่ค้าง และผู้ดูแลคนอื่น · บันทึกการใช้งาน (log) เก็บไว้</p>
     </div>
   </div>
   <div class="grid" style="margin-bottom:12px">
     <label style="font-weight:400;display:flex;gap:8px;align-items:flex-start">
       <input type="radio" name="mode" value="keep" checked style="margin-top:4px">
-      <span><b>เก็บบัญชีผู้ดูแลของฉันไว้</b> (แนะนำ)<span class="hint">ลบเสร็จยังอยู่ในระบบ แล้วตั้งรหัสลงทะเบียนใหม่ได้ทันที</span></span></label>
+      <span><b>เก็บบัญชีผู้ดูแลของฉันไว้</b> (แนะนำ)<span class="hint">ลบเสร็จยังอยู่ในระบบ</span></span></label>
     <label style="font-weight:400;display:flex;gap:8px;align-items:flex-start">
       <input type="radio" name="mode" value="all" style="margin-top:4px">
-      <span><b>ลบทุกอย่างรวมบัญชีของฉัน</b><span class="hint">ระบบกลับเป็นค่าเริ่มต้น — ชื่อผู้ใช้/รหัสผ่านที่กรอกในการเข้าสู่ระบบครั้งแรกจะเป็นผู้ดูแลระบบ</span></span></label>
+      <span><b>ลบทุกอย่างรวมบัญชีผู้ดูแลของฉัน</b><span class="hint">การกด "เข้าสู่ระบบผู้ดูแล" ครั้งแรกหลังจากนี้จะบันทึกเป็นผู้ดูแลคนใหม่</span></span></label>
   </div>
   <div class="grid" style="align-items:end">
     <div><label>พิมพ์คำว่า <b>ลบทั้งหมด</b></label><input type="text" name="confirm" required autocomplete="off"></div>

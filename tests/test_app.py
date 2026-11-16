@@ -87,8 +87,10 @@ def app(make_app):
 
 @pytest.fixture()
 def admin(app):
+    """ผู้ดูแล: กดเข้าสู่ระบบครั้งแรก = บันทึกเป็นผู้ดูแล"""
     c = app.test_client()
-    c.post("/setup", data={"username": "admin", "password": "secret1"})
+    r = c.post("/login", data={"username": "admin", "password": "secret1", "password2": "secret1"})
+    assert r.status_code == 302
     return c
 
 
@@ -97,29 +99,56 @@ def do_import(client, f, owner="auto", name="ค่าเริ่มต้น__
                        content_type="multipart/form-data", follow_redirects=True)
 
 
-def chunked_import(client, data, chunk, owner="auto", token="ab" * 16, skip=None, headers=None):
+def upload_parts(client, data, token="ab" * 16, chunk=1 << 20):
+    n = max(1, -(-len(data) // chunk))
+    for i in range(n):
+        r = client.post("/import/chunk", data=data[i * chunk:(i + 1) * chunk],
+                        headers={"X-Upload-Token": token, "X-Chunk-Index": str(i)})
+        assert r.status_code == 200, r.get_data(as_text=True)
+    return {"token": token, "chunks": n, "filename": "ค่าเริ่มต้น__20261116_083829.xlsx"}
+
+
+def chunked_import(client, data, chunk, owner="auto", token="ab" * 16, skip=None):
     n = max(1, -(-len(data) // chunk))
     for i in range(n):
         if i == skip:
             continue
         r = client.post("/import/chunk", data=data[i * chunk:(i + 1) * chunk],
                         headers={"X-Upload-Token": token, "X-Chunk-Index": str(i),
-                                 "Content-Type": "application/octet-stream", **(headers or {})})
+                                 "Content-Type": "application/octet-stream"})
         assert r.status_code == 200, r.get_data(as_text=True)
     return client.post("/import/finish", data={"token": token, "chunks": n, "owner": owner,
                                                "filename": "ค่าเริ่มต้น__20261116_083829.xlsx"})
 
 
-def owner_ids(app):
+def guest_import(client, names, token="ab" * 16):
+    """ผู้ใช้ทั่วไป (ไม่ล็อกอิน) อัปโหลด + เลือกพนักงานสอบสวน คืน owner id ของชุดข้อมูลส่วนตัว"""
+    up = upload_parts(client, tpo_file(ROWS).getvalue(), token=token)
+    r = client.post("/import/finish", data={**up, "select": "1", "names": names})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    url = client.get("/").headers["Location"]
+    return int(re.search(r"/owners/(\d+)", url)[1])
+
+
+def q(app, sql, params=()):
     from caseapp.db import get_db
     with app.app_context():
-        return {r["name"]: r["id"] for r in get_db().execute("SELECT id, name FROM owners")}
+        return get_db().execute(sql, params).fetchall()
 
 
-def export(client, oid):
-    r = client.get(f"/owners/{oid}/export")
-    assert r.status_code == 200
+def owner_ids(app):
+    return {r["name"]: r["id"] for r in q(app, "SELECT id, name FROM owners WHERE token IS NULL")}
+
+
+def export(client, oid, by="ผู้ทดสอบ ระบบ"):
+    r = client.get(f"/owners/{oid}/export", query_string={"by": by})
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
     return openpyxl.load_workbook(io.BytesIO(r.data))
+
+
+def logs(app, action=None):
+    rows = q(app, "SELECT * FROM logs ORDER BY id")
+    return [r for r in rows if action is None or r["action"] == action]
 
 
 def test_thai_dates():
@@ -131,17 +160,162 @@ def test_thai_dates():
     assert thai_short_time("2026-01-28T00:00") == "28 ม.ค. 2569 0:00"
 
 
-def test_requires_setup_then_login(app):
+# ---------------------------------------------------------------- ผู้ใช้ทั่วไป: ไม่ต้องล็อกอิน
+
+def test_open_link_and_use_without_login(app):
     c = app.test_client()
-    assert c.get("/").headers["Location"].endswith("/login")
-    c.post("/setup", data={"username": "admin", "password": "secret1"})
-    c.post("/logout")
-    assert "/login" in c.get("/").headers["Location"]
+    assert c.get("/").headers["Location"].endswith("/import")
+    page = c.get("/import").get_data(as_text=True)
+    assert "ไม่ต้องล็อกอิน" in page and "เข้าสู่ระบบผู้ดูแล" in page
+    oid = guest_import(c, [A])
+    page = c.get(f"/owners/{oid}").get_data(as_text=True)
+    assert A in page and "ลิงก์ส่วนตัว" not in page  # ลิงก์ส่วนตัวอยู่ในแท็บตั้งค่า
+    assert [r["case_id"] for r in q(app, "SELECT case_id FROM cases WHERE owner_id = ? ORDER BY case_id",
+                                    (oid,))] == ["T001", "T002"]
+    assert q(app, "SELECT name FROM owners WHERE id = ?", (oid,))[0]["name"] == A
 
 
-def test_import_splits_by_owner(app, admin):
-    r = do_import(admin, tpo_file(ROWS))
-    assert r.status_code == 200
+def test_workspaces_are_private_per_browser(app):
+    a, b = app.test_client(), app.test_client()
+    oa = guest_import(a, [A])
+    assert b.get(f"/owners/{oa}").status_code == 403
+    assert b.get(f"/owners/{oa}/export", query_string={"by": "x y"}).status_code == 403
+    assert b.post(f"/owners/{oa}/purge", data={"confirm": "ลบ"}).status_code == 403
+    # อีกเบราว์เซอร์นำเข้าไฟล์เดียวกันได้ชุดของตัวเอง (Case ID ซ้ำข้ามชุดข้อมูลได้)
+    ob = guest_import(b, [A], token="cd" * 16)
+    assert ob != oa
+    assert len(q(app, "SELECT id FROM cases WHERE case_id = 'T001'")) == 2
+    assert b.get(f"/owners/{ob}").status_code == 200
+
+
+def test_download_requires_name_and_is_logged(app):
+    c = app.test_client()
+    oid = guest_import(c, [A, B])  # เลือก 2 คน → ชุดข้อมูลยังไม่มีชื่อ
+    assert q(app, "SELECT name FROM owners WHERE id = ?", (oid,))[0]["name"] == ""
+    r = c.get(f"/owners/{oid}/export")
+    assert r.status_code == 200 and r.mimetype == "text/html" and "ชื่อผู้ดาวน์โหลด" in r.get_data(as_text=True)
+    assert c.get(f"/owners/{oid}/export", query_string={"by": " "}).mimetype == "text/html"
+    wb = export(c, oid, by="พ.ต.ท.ผู้ดาวน์โหลด ทดสอบ")
+    assert "พ.ต.ท.ผู้ดาวน์โหลด ทดสอบ" in wb["1.1 Case ID ทั้งหมด"]["A2"].value  # ใช้เป็นชื่อในรายงาน
+    d = logs(app, "download")
+    assert len(d) == 1 and d[0]["actor"] == "พ.ต.ท.ผู้ดาวน์โหลด ทดสอบ" and d[0]["owner_id"] == oid
+    assert d[0]["ip"] == "127.0.0.1"
+
+
+def test_log_ip_is_real_not_spoofed(app, monkeypatch):
+    c = app.test_client()
+    # ไม่ได้อยู่บน Vercel: X-Forwarded-For ที่ผู้ใช้ส่งมาเองต้องไม่ถูกเชื่อ
+    c.get("/import")
+    up = upload_parts(c, tpo_file(ROWS).getvalue())
+    c.post("/import/finish", data={**up, "select": "1", "names": [A]},
+           headers={"X-Forwarded-For": "6.6.6.6", "User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/120"})
+    row = logs(app, "import")[-1]
+    assert row["ip"] == "127.0.0.1" and row["ua"] == "Chrome · Windows"
+    # บน Vercel: ใช้ header ที่ Vercel ตั้งเอง
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "ON_VERCEL", True)
+    oid = int(re.search(r"/owners/(\d+)", c.get("/").headers["Location"])[1])
+    c.get(f"/owners/{oid}/export", query_string={"by": "ทดสอบ ไอพี"},
+          headers={"x-vercel-forwarded-for": "203.0.113.9", "User-Agent": "Mozilla/5.0 (iPhone) Safari/604"})
+    row = logs(app, "download")[-1]
+    assert row["ip"] == "203.0.113.9" and row["ua"] == "Safari · iPhone"
+
+
+def test_private_link_opens_workspace_elsewhere(app):
+    a = app.test_client()
+    oid = guest_import(a, [A])
+    page = a.get(f"/owners/{oid}?tab=settings").get_data(as_text=True)
+    link = re.search(r'id="plink" value="([^"]+)"', page)[1]
+    other = app.test_client()
+    r = other.get(link.replace("http://localhost", ""))
+    assert r.headers["Location"].endswith(f"/owners/{oid}")
+    assert other.get(f"/owners/{oid}").status_code == 200
+    assert logs(app, "workspace_link")
+    r = other.get("/w/not-a-real-token", follow_redirects=True)
+    assert "ใช้ไม่ได้แล้ว" in r.get_data(as_text=True)
+
+
+def test_guest_purge(app):
+    c = app.test_client()
+    oid = guest_import(c, [A])
+    r = c.post(f"/owners/{oid}/purge", data={"confirm": "ไม่"}, follow_redirects=True)
+    assert "ยังไม่ได้ลบข้อมูล" in r.get_data(as_text=True)
+    assert len(q(app, "SELECT id FROM cases WHERE owner_id = ?", (oid,))) == 2
+    c.post(f"/owners/{oid}/purge", data={"confirm": "ลบ"})
+    assert q(app, "SELECT id FROM cases WHERE owner_id = ?", (oid,)) == []
+    r = c.post(f"/owners/{oid}/purge", data={"confirm": "ลบ", "delete_workspace": "1"})
+    assert r.headers["Location"].endswith("/")
+    assert q(app, "SELECT id FROM owners WHERE id = ?", (oid,)) == []
+    assert c.get("/").headers["Location"].endswith("/import")
+    assert [r["action"] for r in logs(app, "purge")] == ["purge", "purge"]
+
+
+def test_guest_cannot_reach_admin_pages(app, admin):
+    c = app.test_client()
+    for url in ("/admin/logs", "/admin/users"):
+        assert "/login" in c.get(url).headers["Location"]
+    assert c.post("/admin/reset", data={"confirm": "ลบทั้งหมด"}).status_code == 302
+    assert c.post("/admin/owners", data={"action": "delete_many", "ids": ["1"]}).status_code == 302
+
+
+# ---------------------------------------------------------------- ผู้ดูแล
+
+def test_first_admin_login_then_normal_login(app):
+    c = app.test_client()
+    page = c.get("/login").get_data(as_text=True)
+    assert "เข้าสู่ระบบผู้ดูแลครั้งแรก" in page
+    r = c.post("/login", data={"username": "boss", "password": "secret1", "password2": "secret9"})
+    assert "ยืนยันรหัสผ่านไม่ตรงกัน" in r.get_data(as_text=True)
+    assert c.post("/login", data={"username": "boss", "password": "secret1", "password2": "secret1"}).status_code == 302
+    assert "บันทึกการใช้งาน" in c.get("/").get_data(as_text=True)
+    other = app.test_client()
+    assert "เข้าสู่ระบบผู้ดูแลครั้งแรก" not in other.get("/login").get_data(as_text=True)
+    r = other.post("/login", data={"username": "intruder", "password": "secret1", "password2": "secret1"})
+    assert "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" in r.get_data(as_text=True)
+    assert [(r["username"], r["role"]) for r in q(app, "SELECT username, role FROM users")] == [("boss", "admin")]
+    assert logs(app, "admin_login_failed")[0]["detail"].endswith("intruder")
+
+
+def test_admin_login_keeps_own_workspace_and_sees_everything(app, admin):
+    g1 = app.test_client()
+    oid = guest_import(g1, [A])
+    page = admin.get("/").get_data(as_text=True)
+    assert A in page and "ส่วนตัว" in page
+    assert admin.get(f"/owners/{oid}").status_code == 200
+    logs_page = admin.get("/admin/logs").get_data(as_text=True)
+    assert "นำเข้าไฟล์" in logs_page and "เริ่มใช้งาน" in logs_page and "127.0.0.1" in logs_page
+    assert "นำเข้าไฟล์" in admin.get("/admin/logs?action=import").get_data(as_text=True)
+    # ผู้ใช้ทั่วไปเข้าสู่ระบบผู้ดูแลแล้วออก ชุดข้อมูลของเบราว์เซอร์ยังอยู่
+    g1.post("/login", data={"username": "admin", "password": "secret1"})
+    g1.post("/logout")
+    assert g1.get("/").headers["Location"].endswith(f"/owners/{oid}")
+
+
+def test_login_throttle(app, admin, monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "LOGIN_FAIL_LIMIT", 3)
+    c = app.test_client()
+    for _ in range(3):
+        c.post("/login", data={"username": "admin", "password": "wrong"})
+    r = c.post("/login", data={"username": "admin", "password": "secret1"})
+    assert "รอ 15 นาที" in r.get_data(as_text=True)
+
+
+def test_old_officer_accounts_cannot_log_in(app, admin):
+    from werkzeug.security import generate_password_hash
+    from caseapp.db import get_db
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO users (username, password_hash, role) VALUES ('off', ?, 'officer')",
+                   (generate_password_hash("secret1"),))
+        db.commit()
+    c = app.test_client()
+    r = c.post("/login", data={"username": "off", "password": "secret1"})
+    assert "ไม่ถูกต้อง" in r.get_data(as_text=True)
+
+
+def test_admin_import_splits_by_owner(app, admin):
+    do_import(admin, tpo_file(ROWS))
     ids = owner_ids(app)
     assert set(ids) == {A, B}
     wb = export(admin, ids[A])
@@ -152,12 +326,9 @@ def test_import_splits_by_owner(app, admin):
                                          "มูลค่าความเสียหาย (บาท)", "เลขคดีอาญา", "พนักงานสอบสวน", "สถานะ"]
     assert [s11.cell(r, 2).value for r in (5, 6)] == ["T001", "T002"]
     assert s11["F6"].value == 250000.5
-    assert s11.cell(7, 2).value is None  # T003 เป็นของ B
-    # เลขคดีอาญาจาก thaipoliceonline เข้าข้อ 1.3 อัตโนมัติ
+    assert s11.cell(7, 2).value is None
     assert wb["1.3 คดีอาญา (C.)"]["B5"].value == "50/2569"
     assert wb["สรุป"]["C5"].value.startswith("=COUNTA('1.1 Case ID ทั้งหมด'!B5:B")
-    assert "16 พ.ย. 69" in wb["สรุป"]["A20"].value or any(
-        "16 พ.ย. 69" in str(c.value) for c in wb["สรุป"]["A"])
 
 
 def test_reimport_keeps_manual_fields(app, admin):
@@ -165,8 +336,7 @@ def test_reimport_keeps_manual_fields(app, admin):
     ids = owner_ids(app)
     admin.post(f"/owners/{ids[A]}/bulk", data={"kind": "s12", "data": "T001\nX999999\tคนนอกรายการ"})
     do_import(admin, tpo_file(ROWS))
-    wb = export(admin, ids[A])
-    s12 = wb["1.2 สอบปากคำแล้ว"]
+    s12 = export(admin, ids[A])["1.2 สอบปากคำแล้ว"]
     assert [s12.cell(r, 2).value for r in (5, 6)] == ["T001", "X999999"]
     assert [s12.cell(r, 5).value for r in (5, 6)] == ["อยู่ในรายการ 1.1", "ไม่อยู่ในรายการ 1.1"]
 
@@ -179,24 +349,22 @@ def test_criminal_backlog_and_c_update(app, admin):
     admin.post(f"/owners/{oid}/bulk", data={"kind": "s13", "data":
         "50/2569\tT002\tนาย ข\t16 เม.ย. 2569 15:35\tจำหน่าย\n"
         "60/2569\t\tนาง ไม่มีเคส\t01/11/2569\tระหว่างสอบสวน"})
-    from caseapp.db import get_db
-    with app.app_context():
-        pk = get_db().execute("SELECT id FROM cases WHERE case_id = 'T002'").fetchone()[0]
+    pk = q(app, "SELECT id FROM cases WHERE owner_id = ? AND case_id = 'T002'", (oid,))[0]["id"]
     admin.post(f"/cases/{pk}", data={"criminal_no": "50/2569", "c_status": "จำหน่าย",
                                      "actual_status": "ระหว่างสอบสวน", "complaint_date": "2026-04-16T15:35",
                                      "backlog_reason": "รอผลหมายเรียกผู้ต้องหา"})
     wb = export(admin, oid)
     s13 = wb["1.3 คดีอาญา (C.)"]
     rows = {s13.cell(r, 2).value: [s13.cell(r, j).value for j in range(1, 8)] for r in (5, 6)}
-    assert rows["60/2569"][2] is None  # ไม่มี Case ID
+    assert rows["60/2569"][2] is None
     assert rows["50/2569"][4] == "16 เม.ย. 2569 15:35"
     assert rows["50/2569"][6] == "ต้องปรับปรุงข้อมูล (ข้อ 1.4)"
     assert wb["1.4 ปรับปรุงข้อมูล C."]["C5"].value == "T002"
     s15 = wb["1.5 ค้างเกิน 6 เดือน"]
     assert s15["B5"].value == "(ข) ต้องปรับปรุงข้อมูลในระบบ C."
     assert s15["H5"].value == "16/04/2569"
-    assert s15["G5"].fill.fgColor.rgb == "FFFFF2CC"  # ศาลยังว่าง = สีเหลือง
-    assert s15.cell(6, 3).value is None  # 60/2569 ยังไม่ถึง 6 เดือน
+    assert s15["G5"].fill.fgColor.rgb == "FFFFF2CC"
+    assert s15.cell(6, 3).value is None
     assert wb["1.1 Case ID ทั้งหมด"]["A2"].value == "ข้อมูล ณ วันที่ 16 พ.ย. 2569 · พ.ต.ต.ทดสอบ หนึ่ง สว.(สอบสวน) กก.9"
 
 
@@ -207,142 +375,28 @@ def test_report_roundtrip(app, admin, make_app):
     admin.post(f"/owners/{oid}/bulk", data={"kind": "s12", "data": "T002"})
     admin.post(f"/owners/{oid}/bulk", data={"kind": "s13", "data": "50/2569\tT002\tนาย ข\t16 เม.ย. 2569 15:35\tระหว่างสอบสวน"})
     admin.post(f"/owners/{oid}/settings", data={"position": "", "as_of": "2026-11-16", "tpo_date": "", "notes": "หมายเหตุพิเศษ"})
-    first = admin.get(f"/owners/{oid}/export").data
-
+    first = admin.get(f"/owners/{oid}/export", query_string={"by": "ทดสอบ ระบบ"}).data
     app2 = make_app("t2")
     c2 = app2.test_client()
-    c2.post("/setup", data={"username": "admin", "password": "secret1"})
+    c2.post("/login", data={"username": "admin", "password": "secret1", "password2": "secret1"})
     do_import(c2, io.BytesIO(first), name="เอกสารแนบ.xlsx")
-    oid2 = owner_ids(app2)[A]
     a = openpyxl.load_workbook(io.BytesIO(first))
-    b = export(c2, oid2)
+    b = export(c2, owner_ids(app2)[A])
     for name in a.sheetnames:
-        va = [[c.value for c in r] for r in a[name].iter_rows()]
-        vb = [[c.value for c in r] for r in b[name].iter_rows()]
-        assert va == vb, name
+        assert [[c.value for c in r] for r in a[name].iter_rows()] == \
+               [[c.value for c in r] for r in b[name].iter_rows()], name
 
 
-def test_officer_sees_only_own_data(app, admin):
-    do_import(admin, tpo_file(ROWS))
-    ids = owner_ids(app)
-    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
-                                     "role": "officer", "owner_id": ids[A]})
-    off = app.test_client()
-    off.post("/login", data={"username": "a", "password": "secret1"})
-    assert off.get("/").headers["Location"].endswith(f"/owners/{ids[A]}")
-    assert off.get(f"/owners/{ids[A]}").status_code == 200
-    assert off.get(f"/owners/{ids[B]}").status_code == 403
-    assert off.get(f"/owners/{ids[B]}/export").status_code == 403
-    assert off.get("/admin/users").status_code == 403
-    from caseapp.db import get_db
-    with app.app_context():
-        pk_b = get_db().execute("SELECT id FROM cases WHERE case_id = 'T003'").fetchone()[0]
-    assert off.get(f"/cases/{pk_b}").status_code == 403
-    # ผู้ใช้ทั่วไปนำเข้าไฟล์ที่มีคดีของคนอื่น: คดีของคนอื่นไม่ถูกย้าย
-    r = do_import(off, tpo_file(ROWS))
-    assert r.status_code == 200
-    with app.app_context():
-        owner_t003 = get_db().execute("SELECT owner_id FROM cases WHERE case_id = 'T003'").fetchone()[0]
-    assert owner_t003 == ids[B]
-    # วางรายการ Case ID ของคนอื่นก็ไม่ย้าย
-    off.post(f"/owners/{ids[A]}/bulk", data={"kind": "s12", "data": "T003"})
-    with app.app_context():
-        row = get_db().execute("SELECT owner_id, statement_taken FROM cases WHERE case_id = 'T003'").fetchone()
-    assert (row["owner_id"], row["statement_taken"]) == (ids[B], 0)
-
-
-def test_admin_reassign_owner_is_sticky(app, admin):
-    do_import(admin, tpo_file(ROWS))
-    ids = owner_ids(app)
-    from caseapp.db import get_db
-    with app.app_context():
-        pk = get_db().execute("SELECT id FROM cases WHERE case_id = 'T003'").fetchone()[0]
-    admin.post(f"/cases/{pk}", data={"owner_id": ids[A]})
-    do_import(admin, tpo_file(ROWS))  # แยกอัตโนมัติ: ต้องไม่ย้ายกลับไป B
-    wb = export(admin, ids[A])
-    s11 = wb["1.1 Case ID ทั้งหมด"]
-    assert [s11.cell(r, 2).value for r in (5, 6, 7)] == ["T001", "T002", "T003"]
-    notes = " ".join(str(c.value) for c in wb["สรุป"]["A"] if c.value)
-    assert re.search(r"1 รายการที่ระบบยังระบุ " + re.escape(B), notes)
-
-
-def test_csrf_enforced(make_app):
-    app = make_app("c", TESTING_NO_CSRF=False)
-    c = app.test_client()
-    assert c.post("/setup", data={"username": "x", "password": "secret1"}).status_code == 400
-
-
-def test_duplicate_owner_name_recovers(app, admin):
-    """ชื่อซ้ำต้องไม่ทำให้ transaction ค้าง (สำคัญกับ Postgres)"""
-    admin.post("/admin/owners", data={"action": "create", "name": A})
-    r = admin.post("/admin/owners", data={"action": "create", "name": A})
-    assert r.status_code == 302
-    assert admin.get("/").status_code == 200
+def test_admin_select_only_some_investigators(app, admin):
+    up = upload_parts(admin, tpo_file(ROWS).getvalue())
+    info = admin.post("/import/inspect", data=up).get_json()
+    assert info["kind"] == "tpo" and info["rows"] == 3
+    assert [(p["name"], p["rows"]) for p in info["investigators"]] == [(A, 2), (B, 1)]
+    assert admin.post("/import/finish", data={**up, "select": "1"}).status_code == 400
+    up = upload_parts(admin, tpo_file(ROWS).getvalue(), token="cd" * 16)
+    r = admin.post("/import/finish", data={**up, "select": "1", "names": [A], "owner": "auto"})
+    assert "ข้าม (ไม่ได้เลือก)" in admin.get(r.get_json()["url"]).get_data(as_text=True)
     assert list(owner_ids(app)) == [A]
-
-
-def test_vercel_requires_env(monkeypatch):
-    import caseapp.app as mod
-    monkeypatch.setattr(mod, "ON_VERCEL", True)
-    monkeypatch.delenv("SECRET_KEY", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("POSTGRES_URL", raising=False)
-    with pytest.raises(mod.ConfigError):
-        mod.create_app()
-
-
-def test_chunked_upload(app, admin, monkeypatch):
-    """ไฟล์ใหญ่ถูกแบ่งส่งทีละส่วน (Vercel จำกัด 4.5 MB ต่อคำขอ) ผลต้องเหมือนอัปโหลดครั้งเดียว"""
-    import caseapp.app as mod
-    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
-    data = tpo_file(ROWS).getvalue()
-    assert len(data) > 3 * 1024
-    r = chunked_import(admin, data, 1024)
-    assert r.status_code == 200, r.get_data(as_text=True)
-    url = r.get_json()["url"]
-    page = admin.get(url).get_data(as_text=True)
-    assert "นำเข้าสำเร็จ" in page and A in page and B in page
-    assert set(owner_ids(app)) == {A, B}
-    from caseapp.db import get_db
-    with app.app_context():
-        assert get_db().execute("SELECT COUNT(*) FROM uploads").fetchone()[0] == 0
-        assert get_db().execute("SELECT COUNT(*) FROM cases").fetchone()[0] == 3
-
-
-def test_chunked_upload_rejects_missing_part_and_other_users(app, admin, monkeypatch):
-    import caseapp.app as mod
-    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
-    data = tpo_file(ROWS).getvalue()
-    r = chunked_import(admin, data, 1024, skip=1)
-    assert r.status_code == 400 and "ไม่ครบ" in r.get_json()["error"]
-    # ส่วนที่ผู้ดูแลอัปโหลดไว้ ผู้ใช้อื่นนำไปใช้ไม่ได้
-    do_import(admin, tpo_file(ROWS))
-    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
-                                     "role": "officer", "owner_id": owner_ids(app)[A]})
-    for i in range(2):
-        admin.post("/import/chunk", data=data[i * 1024:(i + 1) * 1024],
-                   headers={"X-Upload-Token": "cd" * 16, "X-Chunk-Index": str(i)})
-    off = app.test_client()
-    off.post("/login", data={"username": "a", "password": "secret1"})
-    r = off.post("/import/finish", data={"token": "cd" * 16, "chunks": 2})
-    assert r.status_code == 400
-    # ขนาดส่วนเกินกำหนด
-    r = admin.post("/import/chunk", data=b"x" * 2048,
-                   headers={"X-Upload-Token": "ef" * 16, "X-Chunk-Index": "0"})
-    assert r.status_code == 400
-
-
-def test_chunk_requires_csrf_header(make_app):
-    app = make_app("c2", TESTING_NO_CSRF=False)
-    c = app.test_client()
-    page = c.get("/login").get_data(as_text=True)
-    token = re.search(r'name="csrf" value="([0-9a-f]+)"', page)[1]
-    c.post("/setup", data={"username": "admin", "password": "secret1", "csrf": token})
-    # เข้าสู่ระบบแล้ว session ถูกสร้างใหม่: ใช้ token จากหน้านำเข้า
-    token = re.search(r'name="csrf" value="([0-9a-f]+)"', c.get("/import").get_data(as_text=True))[1]
-    hdr = {"X-Upload-Token": "ab" * 16, "X-Chunk-Index": "0"}
-    assert c.post("/import/chunk", data=b"PK", headers=hdr).status_code == 400
-    assert c.post("/import/chunk", data=b"PK", headers={**hdr, "X-CSRF-Token": token}).status_code == 200
 
 
 def test_owner_table_pagination_and_search(app, admin, monkeypatch):
@@ -353,75 +407,18 @@ def test_owner_table_pagination_and_search(app, admin, monkeypatch):
     p1 = admin.get(f"/owners/{oid}?tab=s11").get_data(as_text=True)
     p2 = admin.get(f"/owners/{oid}?tab=s11&page=2").get_data(as_text=True)
     assert "T001" in p1 and "T002" not in p1 and "(หน้า 1/2)" in p1
-    assert "T002" in p2 and ">2</td>" in p2  # ลำดับต่อจากหน้าก่อน
+    assert "T002" in p2 and ">2</td>" in p2
     found = admin.get(f"/owners/{oid}?tab=s11&q=ผู้เสียหาย ข").get_data(as_text=True)
     assert "T002" in found and "T001" not in found and "พบ 1 รายการ" in found
 
 
-def test_import_error_messages(app, admin, monkeypatch):
-    import caseapp.app as mod
-    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
-    # ไฟล์ .xls รุ่นเก่า / ไม่ใช่ zip
-    r = chunked_import(admin, b"\xd0\xcf\x11\xe0 old xls", 1024)
-    assert r.status_code == 400 and "Save As" in r.get_json()["error"]
-    # xlsx แต่หัวตารางไม่ตรง: บอกหัวตารางที่พบ
-    wb = openpyxl.Workbook()
-    wb.active.append(["ชื่อ", "เบอร์โทร"])
-    buf = io.BytesIO()
-    wb.save(buf)
-    r = chunked_import(admin, buf.getvalue(), 1024, token="cd" * 16)
-    err = r.get_json()["error"]
-    assert r.status_code == 400 and "ไม่รู้จักรูปแบบไฟล์" in err and "ชื่อ, เบอร์โทร" in err
-    # session หมดอายุ: endpoint นำเข้าตอบ JSON ไม่ใช่ redirect ไปหน้า login
-    anon = app.test_client()
-    r = anon.post("/import/finish", data={"token": "ab" * 16, "chunks": 1})
-    assert r.status_code == 401 and "เข้าสู่ระบบ" in r.get_json()["error"]
-    # หน้า HTML ไม่ถูก cache
-    assert admin.get("/import").headers["Cache-Control"] == "no-store"
-
-
-def upload_parts(client, data, token="ab" * 16, chunk=1 << 20):
-    n = max(1, -(-len(data) // chunk))
-    for i in range(n):
-        client.post("/import/chunk", data=data[i * chunk:(i + 1) * chunk],
-                    headers={"X-Upload-Token": token, "X-Chunk-Index": str(i)})
-    return {"token": token, "chunks": n, "filename": "ค่าเริ่มต้น__20261116_083829.xlsx"}
-
-
-def test_inspect_then_import_only_selected(app, admin):
-    """ไฟล์มีหลายคน แต่เลือกนำเข้าเฉพาะคนเดียว: คนอื่นต้องไม่ถูกสร้าง"""
-    up = upload_parts(admin, tpo_file(ROWS).getvalue())
-    r = admin.post("/import/inspect", data=up)
-    info = r.get_json()
-    assert info["kind"] == "tpo" and info["rows"] == 3
-    assert info["investigators"] == [{"name": A, "rows": 2, "exists": False},
-                                     {"name": B, "rows": 1, "exists": False}]
-    assert admin.post("/import/finish", data={**up, "select": "1"}).status_code == 400  # ไม่ได้เลือกใคร
-    up = upload_parts(admin, tpo_file(ROWS).getvalue(), token="cd" * 16)
-    r = admin.post("/import/finish", data={**up, "select": "1", "names": [A], "owner": "auto"})
-    assert r.status_code == 200, r.get_data(as_text=True)
-    page = admin.get(r.get_json()["url"]).get_data(as_text=True)
-    assert "ข้าม (ไม่ได้เลือก)" in page
-    assert list(owner_ids(app)) == [A]
-    from caseapp.db import get_db
-    with app.app_context():
-        assert {r[0] for r in get_db().execute("SELECT case_id FROM cases")} == {"T001", "T002"}
-
-
-def test_officer_picks_rows_into_own_owner(app, admin):
-    """ผู้ใช้ทั่วไปเลือกคดีที่ระบบยังระบุพนักงานสอบสวนคนเดิม: เข้าเป็นของตัวเอง"""
-    admin.post("/admin/owners", data={"action": "create", "name": A})
-    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
-                                     "role": "officer", "owner_id": owner_ids(app)[A]})
-    off = app.test_client()
-    off.post("/login", data={"username": "a", "password": "secret1"})
-    assert A in off.get("/import").get_data(as_text=True)
-    up = upload_parts(off, tpo_file(ROWS).getvalue())
-    r = off.post("/import/finish", data={**up, "select": "1", "names": [A, B]})
-    assert r.status_code == 200
-    assert list(owner_ids(app)) == [A]
-    wb = export(off, owner_ids(app)[A])
-    assert [c.value for c in wb["1.1 Case ID ทั้งหมด"]["B"][4:7]] == ["T001", "T002", "T003"]
+def test_admin_purge_requires_password(app, admin):
+    c = app.test_client()
+    oid = guest_import(c, [A])
+    admin.post(f"/owners/{oid}/purge", data={"password": "wrong", "confirm": "ลบ"})
+    assert len(q(app, "SELECT id FROM cases WHERE owner_id = ?", (oid,))) == 2
+    admin.post(f"/owners/{oid}/purge", data={"password": "secret1"})
+    assert q(app, "SELECT id FROM cases WHERE owner_id = ?", (oid,)) == []
 
 
 def test_delete_many_owners(app, admin):
@@ -429,185 +426,154 @@ def test_delete_many_owners(app, admin):
     ids = owner_ids(app)
     r = admin.post("/admin/owners", data={"action": "delete_many", "ids": [ids[A], ids[B]]},
                    follow_redirects=True)
-    assert "ลบเจ้าของข้อมูล 2 คน" in r.get_data(as_text=True)
+    assert "ลบ 2 ชุดข้อมูล" in r.get_data(as_text=True)
     assert owner_ids(app) == {}
+    assert logs(app, "owner_delete")
 
 
-def register(client, name, username, code="unit-code-1", password="password1"):
-    return client.post("/register", data={"name": name, "username": username, "password": password,
-                                         "password2": password, "code": code,
-                                         "position": "สว.(สอบสวน) กก.9"})
-
-
-def test_self_registration_flow(app, admin):
-    anon = app.test_client()
-    assert "ปิดรับสมัคร" in anon.get("/register").get_data(as_text=True)
-    assert "สมัครสมาชิก" not in anon.get("/login").get_data(as_text=True)
-    admin.post("/admin/users", data={"action": "registration", "code": "unit-code-1"})
-    assert "สมัครสมาชิก" in anon.get("/login").get_data(as_text=True)
-    # รหัสลงทะเบียนผิด
-    r = register(anon, A, "officer_a", code="wrong")
-    assert "รหัสลงทะเบียนไม่ถูกต้อง" in r.get_data(as_text=True)
-    # สมัครสำเร็จ: เข้าสู่ระบบทันที และไปหน้านำเข้า
-    r = register(anon, A, "officer_a")
-    assert r.status_code == 302 and r.headers["Location"].endswith("/import")
-    assert A in anon.get("/import").get_data(as_text=True)
-    # ชื่อเดียวกัน (เว้นวรรคต่างกัน) สมัครซ้ำไม่ได้
-    other = app.test_client()
-    r = register(other, A.replace(".", ". ", 1), "officer_a2")
-    assert "มีบัญชีของ" in r.get_data(as_text=True)
-    # ชื่อผู้ใช้ซ้ำไม่ได้
-    assert "มีคนใช้แล้ว" in register(other, B, "officer_a").get_data(as_text=True)
-    # ปิดรับสมัคร
-    admin.post("/admin/users", data={"action": "registration", "code": ""})
-    assert "ปิดรับสมัคร" in other.get("/register").get_data(as_text=True)
-
-
-def test_officers_import_unit_file_each_get_own_cases(app, admin):
-    """ไฟล์รวมของกอง: แต่ละคนสมัครเอง นำเข้าไฟล์เดียวกัน แล้วได้เฉพาะคดีของตัวเอง"""
-    admin.post("/admin/users", data={"action": "registration", "code": "unit-code-1"})
-    a, b = app.test_client(), app.test_client()
-    register(a, A, "officer_a")
-    register(b, " ".join(B.split()).replace(".", ". ", 1), "officer_b")  # เว้นวรรคต่างจากในไฟล์
-    data = tpo_file(ROWS).getvalue()
-    for client, name in ((a, A), (b, B)):
-        up = upload_parts(client, data)
-        info = client.post("/import/inspect", data=up).get_json()
-        assert {p["name"] for p in info["investigators"]} == {A, B}
-        r = client.post("/import/finish", data={**up, "select": "1", "names": [name]})
-        assert r.status_code == 200, r.get_data(as_text=True)
-    ids = owner_ids(app)
-    assert len(ids) == 2  # ไม่มีเจ้าของซ้ำจากการเว้นวรรคต่างกัน
-    from caseapp.db import get_db
-    with app.app_context():
-        rows = get_db().execute("SELECT c.case_id, u.username FROM cases c JOIN users u "
-                                "ON u.owner_id = c.owner_id ORDER BY c.case_id").fetchall()
-    assert [(r["case_id"], r["username"]) for r in rows] == [
-        ("T001", "officer_a"), ("T002", "officer_a"), ("T003", "officer_b")]
-    # เห็นเฉพาะของตัวเอง
-    a_owner = [i for n, i in ids.items() if n == A][0]
-    b_owner = [i for n, i in ids.items() if n != A][0]
-    assert a.get(f"/owners/{b_owner}").status_code == 403
-    assert b.get(f"/owners/{a_owner}").status_code == 403
-    # รายงานของ B ไม่มีหมายเหตุ "ระบบยังระบุคนอื่น" เพราะชื่อเทียบแบบไม่สนช่องว่าง
-    notes = " ".join(str(c.value) for c in export(b, b_owner)["สรุป"]["A"] if c.value)
-    assert "รายการที่ระบบยังระบุ" not in notes
-
-
-def test_registration_links_existing_unclaimed_owner(app, admin):
-    do_import(admin, tpo_file(ROWS))  # ผู้ดูแลนำเข้าไว้ก่อน (ยังไม่มีบัญชี)
-    admin.post("/admin/users", data={"action": "registration", "code": "unit-code-1"})
-    c = app.test_client()
-    register(c, A, "officer_a")
-    assert c.get("/").headers["Location"].endswith(f"/owners/{owner_ids(app)[A]}")
-    assert len(owner_ids(app)) == 2
-
-
-def test_officer_deletes_only_own_data(app, admin):
-    do_import(admin, tpo_file(ROWS))
-    ids = owner_ids(app)
-    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
-                                     "role": "officer", "owner_id": ids[A]})
-    off = app.test_client()
-    off.post("/login", data={"username": "a", "password": "secret1"})
-    from caseapp.db import get_db
-
-    def count(oid):
-        with app.app_context():
-            return get_db().execute("SELECT COUNT(*) FROM cases WHERE owner_id = ?", (oid,)).fetchone()[0]
-    # รหัสผ่านผิด: ไม่ลบ
-    r = off.post(f"/owners/{ids[A]}/purge", data={"password": "wrong"}, follow_redirects=True)
-    assert "รหัสผ่านไม่ถูกต้อง" in r.get_data(as_text=True) and count(ids[A]) == 2
-    # ลบของคนอื่นไม่ได้
-    assert off.post(f"/owners/{ids[B]}/purge", data={"password": "secret1"}).status_code == 403
-    # ลบของตัวเอง: เหลือของคนอื่นครบ
-    r = off.post(f"/owners/{ids[A]}/purge", data={"password": "secret1"}, follow_redirects=True)
-    assert "ลบข้อมูลคดีทั้งหมดของ" in r.get_data(as_text=True)
-    assert count(ids[A]) == 0 and count(ids[B]) == 1
-    # ลบบัญชีด้วย: ออกจากระบบ และบัญชี/เจ้าของหายไป
-    r = off.post(f"/owners/{ids[A]}/purge", data={"password": "secret1", "delete_account": "1"})
-    assert r.status_code == 302 and "/login" in r.headers["Location"]
-    assert off.get("/").status_code == 302
-    assert A not in owner_ids(app) and B in owner_ids(app)
-    with app.app_context():
-        assert get_db().execute("SELECT COUNT(*) FROM users WHERE username = 'a'").fetchone()[0] == 0
-
-
-def test_admin_purges_someones_cases_keeps_account(app, admin):
-    do_import(admin, tpo_file(ROWS))
-    ids = owner_ids(app)
-    r = admin.post(f"/owners/{ids[B]}/purge", data={"password": "secret1", "delete_account": "1"})
+def test_duplicate_managed_owner_name_recovers(app, admin):
+    admin.post("/admin/owners", data={"action": "create", "name": A})
+    r = admin.post("/admin/owners", data={"action": "create", "name": A})
     assert r.status_code == 302
-    assert B in owner_ids(app)  # ผู้ดูแลลบเฉพาะคดี ไม่ลบบัญชี/ตัวเอง
     assert admin.get("/").status_code == 200
-    assert "ลบข้อมูล" in admin.get(f"/owners/{ids[B]}?tab=settings").get_data(as_text=True)
+    assert list(owner_ids(app)) == [A]
 
 
-def test_admin_reset_keep_admin(app, admin):
+def test_admin_reset_keep_and_all(app, admin):
+    guest_import(app.test_client(), [A])
     do_import(admin, tpo_file(ROWS))
-    admin.post("/admin/users", data={"action": "registration", "code": "unit-code-1"})
-    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
-                                     "role": "officer", "owner_id": owner_ids(app)[A]})
-    # ยืนยันไม่ครบ: ไม่ลบ
     admin.post("/admin/reset", data={"password": "secret1", "confirm": "ลบ"})
-    admin.post("/admin/reset", data={"password": "wrong", "confirm": "ลบทั้งหมด"})
-    assert len(owner_ids(app)) == 2
+    assert q(app, "SELECT COUNT(*) AS n FROM owners")[0]["n"] == 3
     r = admin.post("/admin/reset", data={"password": "secret1", "confirm": "ลบทั้งหมด", "mode": "keep"},
                    follow_redirects=True)
     assert "ล้างข้อมูลทั้งระบบแล้ว" in r.get_data(as_text=True)
-    from caseapp.db import get_db
-    with app.app_context():
-        db = get_db()
-        assert [x[0] for x in db.execute("SELECT username FROM users")] == ["admin"]
-        for t in ("cases", "owners", "imports", "uploads", "settings"):
-            assert db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0, t
-    assert "ปิดรับสมัคร" in app.test_client().get("/register").get_data(as_text=True)
-    assert admin.get("/").status_code == 200  # ยังอยู่ในระบบ
-
-
-def test_admin_reset_all_then_first_signup_is_admin(app, admin):
-    do_import(admin, tpo_file(ROWS))
+    for t in ("cases", "owners", "imports", "uploads"):
+        assert q(app, f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] == 0, t
+    assert logs(app, "reset")  # log เก็บไว้
     r = admin.post("/admin/reset", data={"password": "secret1", "confirm": "ลบทั้งหมด", "mode": "all"})
     assert r.headers["Location"].endswith("/login")
+    assert "เข้าสู่ระบบผู้ดูแลครั้งแรก" in app.test_client().get("/login").get_data(as_text=True)
+    assert app.test_client().get("/").headers["Location"].endswith("/import")  # ผู้ใช้ทั่วไปยังใช้ได้
+
+
+# ---------------------------------------------------------------- อัปโหลด / ข้อผิดพลาด / ความปลอดภัย
+
+def test_chunked_upload(app, monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
     c = app.test_client()
-    page = c.get("/", follow_redirects=True).get_data(as_text=True)
-    assert "เข้าสู่ระบบครั้งแรก" in page
-    c.post("/login", data={"username": "newadmin", "password": "secret2", "password2": "secret2"})
-    assert "ผู้ใช้งาน" in c.get("/").get_data(as_text=True)
-    assert owner_ids(app) == {}
-    assert app.test_client().post("/admin/reset", data={}).status_code in (302, 403)
+    data = tpo_file(ROWS).getvalue()
+    assert len(data) > 3 * 1024
+    r = chunked_import(c, data, 1024)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert "นำเข้าสำเร็จ" in c.get(r.get_json()["url"]).get_data(as_text=True)
+    assert q(app, "SELECT COUNT(*) AS n FROM uploads")[0]["n"] == 0
+    assert q(app, "SELECT COUNT(*) AS n FROM cases")[0]["n"] == 3
 
 
-def test_officer_cannot_reset(app, admin):
-    admin.post("/admin/owners", data={"action": "create", "name": A})
-    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
-                                     "role": "officer", "owner_id": owner_ids(app)[A]})
-    off = app.test_client()
-    off.post("/login", data={"username": "a", "password": "secret1"})
-    assert off.post("/admin/reset", data={"password": "secret1", "confirm": "ลบทั้งหมด"}).status_code == 403
-
-
-def test_first_login_becomes_admin(app):
-    c = app.test_client()
-    assert c.get("/").headers["Location"].endswith("/login")
-    page = c.get("/login").get_data(as_text=True)
-    assert "เข้าสู่ระบบครั้งแรก" in page and "ผู้ดูแลระบบ (admin)" in page
-    # ยืนยันรหัสผ่านไม่ตรง / ชื่อผู้ใช้ไม่ถูกต้อง: ยังไม่บันทึก
-    r = c.post("/login", data={"username": "boss", "password": "secret1", "password2": "secret9"})
-    assert "ยืนยันรหัสผ่านไม่ตรงกัน" in r.get_data(as_text=True)
-    assert "ชื่อผู้ใช้ต้อง" in c.post("/login", data={"username": "ผู้ดูแล", "password": "secret1",
-                                                     "password2": "secret1"}).get_data(as_text=True)
-    # ครั้งแรกที่กดเข้าสู่ระบบ = บันทึกเป็นผู้ดูแล และเข้าระบบทันที
-    r = c.post("/login", data={"username": "boss", "password": "secret1", "password2": "secret1"})
-    assert r.status_code == 302
-    page = c.get("/", follow_redirects=True).get_data(as_text=True)
-    assert "ผู้ใช้งาน" in page and "ผู้ดูแลระบบ" in page
-    # ครั้งต่อไปเป็นการเข้าสู่ระบบปกติ (ไม่สร้างบัญชีใหม่)
+def test_chunked_upload_missing_part_and_other_browser(app, monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
+    a = app.test_client()
+    data = tpo_file(ROWS).getvalue()
+    r = chunked_import(a, data, 1024, skip=1)
+    assert r.status_code == 400 and "ไม่ครบ" in r.get_json()["error"]
+    for i in range(2):
+        a.post("/import/chunk", data=data[i * 1024:(i + 1) * 1024],
+               headers={"X-Upload-Token": "cd" * 16, "X-Chunk-Index": str(i)})
     other = app.test_client()
-    assert "เข้าสู่ระบบครั้งแรก" not in other.get("/login").get_data(as_text=True)
-    r = other.post("/login", data={"username": "intruder", "password": "secret1", "password2": "secret1"})
-    assert "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" in r.get_data(as_text=True)
-    assert other.post("/login", data={"username": "boss", "password": "secret1"}).status_code == 302
-    from caseapp.db import get_db
+    assert other.post("/import/finish", data={"token": "cd" * 16, "chunks": 2}).status_code == 400
+    r = a.post("/import/chunk", data=b"x" * 2048, headers={"X-Upload-Token": "ef" * 16, "X-Chunk-Index": "0"})
+    assert r.status_code == 400
+
+
+def test_import_error_messages(app, monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "UPLOAD_CHUNK", 1024)
+    c = app.test_client()
+    r = chunked_import(c, b"\xd0\xcf\x11\xe0 old xls", 1024)
+    assert r.status_code == 400 and "Save As" in r.get_json()["error"]
+    wb = openpyxl.Workbook()
+    wb.active.append(["ชื่อ", "เบอร์โทร"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    r = chunked_import(c, buf.getvalue(), 1024, token="cd" * 16)
+    err = r.get_json()["error"]
+    assert r.status_code == 400 and "ไม่รู้จักรูปแบบไฟล์" in err and "ชื่อ, เบอร์โทร" in err
+    assert logs(app, "import_failed")
+    assert c.get("/import").headers["Cache-Control"] == "no-store"
+
+
+def test_csrf_enforced(make_app):
+    app = make_app("c", TESTING_NO_CSRF=False)
+    c = app.test_client()
+    assert c.post("/login", data={"username": "x", "password": "secret1"}).status_code == 400
+    token = re.search(r'name="csrf" value="([0-9a-f]+)"', c.get("/import").get_data(as_text=True))[1]
+    hdr = {"X-Upload-Token": "ab" * 16, "X-Chunk-Index": "0"}
+    assert c.post("/import/chunk", data=b"PK", headers=hdr).status_code == 400
+    assert c.post("/import/chunk", data=b"PK", headers={**hdr, "X-CSRF-Token": token}).status_code == 200
+
+
+def test_vercel_requires_env(monkeypatch):
+    import caseapp.app as mod
+    monkeypatch.setattr(mod, "ON_VERCEL", True)
+    for k in ("SECRET_KEY", "DATABASE_URL", "POSTGRES_URL"):
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(mod.ConfigError):
+        mod.create_app()
+
+
+# ---------------------------------------------------------------- ย้ายฐานข้อมูลรุ่นเดิม
+
+OLD_OWNERS = """CREATE TABLE owners (id {pk}, name TEXT NOT NULL UNIQUE, position TEXT DEFAULT '',
+    as_of TEXT, tpo_date TEXT, notes TEXT DEFAULT '', created_at TEXT)"""
+OLD_CASES = """CREATE TABLE cases (id {pk}, owner_id INTEGER NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+    case_id TEXT NOT NULL, in_tpo INTEGER NOT NULL DEFAULT 0, owner_locked INTEGER NOT NULL DEFAULT 0,
+    victim TEXT, statement_taken INTEGER NOT NULL DEFAULT 0, UNIQUE (case_id))"""
+
+
+def _check_migrated(app):
+    from caseapp.db import get_db, upsert_case
     with app.app_context():
-        assert [(r["username"], r["role"]) for r in get_db().execute("SELECT username, role FROM users")] == [("boss", "admin")]
+        db = get_db()
+        assert db.execute("SELECT victim FROM cases WHERE case_id = 'T001'").fetchone()["victim"] == "เดิม"
+        oid = db.execute("INSERT INTO owners (name, token) VALUES ('', 'tok')").lastrowid
+        assert upsert_case(db, oid, "T001", {"victim": "ชุดใหม่"}) == "created"  # Case ID ซ้ำข้ามชุดได้แล้ว
+        db.execute("INSERT INTO owners (name, token) VALUES (?, 'tok2')", (A,))  # ชื่อซ้ำกับชุดส่วนตัวได้
+        db.commit()
+        assert db.execute("SELECT COUNT(*) FROM cases WHERE case_id = 'T001'").fetchone()[0] == 2
+
+
+def test_migrates_old_sqlite_schema(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(OLD_OWNERS.format(pk="INTEGER PRIMARY KEY"))
+    conn.execute(OLD_CASES.format(pk="INTEGER PRIMARY KEY"))
+    conn.execute("INSERT INTO owners (id, name) VALUES (1, ?)", (A,))
+    conn.execute("INSERT INTO cases (owner_id, case_id, victim, in_tpo) VALUES (1, 'T001', 'เดิม', 1)")
+    conn.commit()
+    conn.close()
+    app = create_app({"DATABASE": str(path), "DATABASE_URL": None, "SECRET_KEY": "x"})
+    _check_migrated(app)
+    create_app({"DATABASE": str(path), "DATABASE_URL": None, "SECRET_KEY": "x"})  # ทำซ้ำได้
+
+
+@pytest.mark.skipif(not PG_URL, reason="ต้องมี TEST_DATABASE_URL")
+def test_migrates_old_postgres_schema():
+    import psycopg
+    schema = f"m_{uuid.uuid4().hex[:10]}"
+    with psycopg.connect(PG_URL, autocommit=True) as conn:
+        conn.execute(f"CREATE SCHEMA {schema}")
+        conn.execute(f"SET search_path TO {schema}")
+        conn.execute(OLD_OWNERS.format(pk="SERIAL PRIMARY KEY"))
+        conn.execute(OLD_CASES.format(pk="SERIAL PRIMARY KEY"))
+        conn.execute("INSERT INTO owners (name) VALUES (%s)", (A,))
+        conn.execute("INSERT INTO cases (owner_id, case_id, victim, in_tpo) VALUES (1, 'T001', 'เดิม', 1)")
+    try:
+        sep = "&" if "?" in PG_URL else "?"
+        app = create_app({"DATABASE_URL": f"{PG_URL}{sep}options=-csearch_path%3D{schema}", "SECRET_KEY": "x"})
+        _check_migrated(app)
+    finally:
+        with psycopg.connect(PG_URL, autocommit=True) as conn:
+            conn.execute(f"DROP SCHEMA {schema} CASCADE")

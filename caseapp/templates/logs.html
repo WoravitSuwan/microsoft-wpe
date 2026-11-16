@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% from "_emblem.html" import emblem %}
+{% block title %}บันทึกการใช้งาน · {{ unit_short }}{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="grid-bg"></div>
+  {{ emblem("hero", "emblem hero-emblem") }}
+  <div class="eyebrow">{{ unit_short }} · สำหรับผู้ดูแลระบบ</div>
+  <h1>บันทึกการใช้งาน</h1>
+  <p class="sub">ใคร ทำอะไร เมื่อไหร่ จาก IP และอุปกรณ์ใด · ทั้งหมด {{ '{:,}'.format(total) }} รายการ · IP คือ IP สาธารณะที่ผู้ใช้ใช้ออกอินเทอร์เน็ต</p>
+</section>
+<form method="get" class="row card" style="padding:14px">
+  <select name="action" style="max-width:260px">
+    <option value="">ทุกการกระทำ</option>
+    {% for k, v in actions.items() %}<option value="{{ k }}" {{ 'selected' if k == action }}>{{ v }}</option>{% endfor %}
+  </select>
+  <input type="text" name="q" value="{{ q }}" placeholder="ค้นหาชื่อ / รายละเอียด / IP" class="search">
+  <button class="btn primary">กรอง</button>
+  {% if q or action %}<a href="{{ url_for('admin_logs') }}">ล้างตัวกรอง</a>{% endif %}
+</form>
+<div class="tbl-wrap">
+<table class="data">
+  <thead><tr><th>เวลา</th><th>การกระทำ</th><th>ผู้กระทำ</th><th>ชุดข้อมูล</th><th>รายละเอียด</th><th>IP</th><th>อุปกรณ์</th></tr></thead>
+  <tbody>{% for r in rows %}
+    <tr>
+      <td class="nowrap">{{ r.created_at }}</td>
+      <td class="nowrap">{% set bad = r.action in ('admin_login_failed', 'import_failed') %}
+        <span class="badge {{ 'warn' if bad else ('ok' if r.action == 'download' else '') }}">{{ actions.get(r.action, r.action) }}</span></td>
+      <td>{{ r.actor or '' }}</td>
+      <td>{% if r.owner_id and r.owner_name is not none %}<a href="{{ url_for('owner_view', owner_id=r.owner_id) }}">{{ r.owner_name or ('ชุดข้อมูล #' ~ r.owner_id) }}</a>{% elif r.owner_id %}<span class="badge muted">ถูกลบแล้ว #{{ r.owner_id }}</span>{% endif %}</td>
+      <td class="clip">{{ r.detail or '' }}</td>
+      <td class="nowrap"><code>{{ r.ip or '' }}</code></td>
+      <td class="nowrap">{{ r.ua or '' }}</td>
+    </tr>
+  {% else %}<tr><td colspan="7" class="empty">ยังไม่มีบันทึก</td></tr>{% endfor %}</tbody>
+</table>
+</div>
+{% if pages > 1 %}
+<div class="row" style="margin-top:12px">
+  {% for p in range(1, pages + 1) %}
+    <a class="btn small {{ 'primary' if p == page }}" href="?page={{ p }}{% if action %}&action={{ action }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}">{{ p }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

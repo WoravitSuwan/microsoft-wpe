@@ -143,10 +143,9 @@ def tpo_investigators(wb):
     return Counter(investigator_of(rec) for rec in read_tpo_rows(wb)).most_common()
 
 
-def import_tpo(db, wb, *, owner_id=None, allow_move=True, only=None):
-    """owner_id=None: แยกเจ้าของตามคอลัมน์พนักงานสอบสวน, ไม่ใช่ None: เข้าเจ้าของนี้ทั้งหมด
+def import_tpo(db, wb, *, owner_id=None, only=None):
+    """owner_id=None: แยกเจ้าของตามคอลัมน์พนักงานสอบสวน, ไม่ใช่ None: เข้าเจ้าของ/ชุดข้อมูลนี้ทั้งหมด
 
-    allow_move=False: ไม่ย้าย Case ID ที่เป็นของเจ้าของอื่นอยู่แล้ว (ใช้กับผู้ใช้ทั่วไป)
     only: ชุดชื่อพนักงานสอบสวน ถ้ากำหนด จะนำเข้าเฉพาะแถวของคนเหล่านี้ (แถวอื่นข้าม)
     """
     skipped = 0
@@ -155,7 +154,7 @@ def import_tpo(db, wb, *, owner_id=None, allow_move=True, only=None):
     owners_new = []
     owner_cache = {}
     units = {}
-    cache = CaseCache(db)
+    cache = CaseCache(db, None if owner_id is None else [owner_id])
     for rec in read_tpo_rows(wb):
         if only is not None and investigator_of(rec) not in only:
             skipped += 1
@@ -180,27 +179,26 @@ def import_tpo(db, wb, *, owner_id=None, allow_move=True, only=None):
             oid = owner_cache[name]
             if fields.get("unit"):
                 units.setdefault(oid, fields["unit"])
-            target, force = oid, False
+            target = oid
         else:
-            target, force = owner_id, allow_move
-        result = upsert_case(db, target, case_id, fields, in_tpo=True, force_owner=force,
-                             allow_move=allow_move, cache=cache)
+            target = owner_id
+        result = upsert_case(db, target, case_id, fields, in_tpo=True, cache=cache)
         stats[result] += 1
         per_owner[target] += 1
         # เลขคดีอาญาจาก thaipoliceonline ใช้เป็นค่าเริ่มต้นของข้อ 1.3 ถ้ายังไม่มีข้อมูลระบบ C.
         no = criminal_no_of(fields.get("tpo_criminal_no"))
-        if no and result != "locked":
-            db.execute("""UPDATE cases SET criminal_no = ? WHERE case_id = ?
+        if no:
+            db.execute("""UPDATE cases SET criminal_no = ? WHERE owner_id = ? AND case_id = ?
                           AND (criminal_no IS NULL OR criminal_no = '')
                           AND NOT EXISTS (SELECT 1 FROM cases x WHERE x.owner_id = cases.owner_id
-                                          AND x.criminal_no = ?)""", (no, case_id, no))
+                                          AND x.criminal_no = ?)""", (no, target, case_id, no))
     # ตั้งตำแหน่งเริ่มต้นจากหน่วยที่รับผิดชอบ (ถ้ายังว่าง)
     for oid, unit in units.items():
         pos = re.sub(r"\s*บช\.สอท\.?$", "", unit).strip()
         db.execute("UPDATE owners SET position = ? WHERE id = ? AND (position IS NULL OR position = '')",
                    (pos, oid))
     return {"rows": sum(stats.values()), "skipped": skipped, "created": stats["created"],
-            "updated": stats["updated"], "locked": stats["locked"],
+            "updated": stats["updated"], "locked": 0,
             "owners_new": owners_new, "per_owner": dict(per_owner)}
 
 
@@ -224,27 +222,29 @@ def _rows(ws, ncols):
     return out
 
 
-def import_report(db, wb, *, owner_id=None, allow_move=True):
+def import_report(db, wb, *, owner_id=None):
     """นำเข้าไฟล์รายงานเดิม (รูปแบบเอกสารแนบ) ให้เป็นข้อมูลของเจ้าของคนเดียว"""
     s11 = _sheet(wb, "1.1")
     rows11 = _rows(s11, 9)
     header = _s(s11["A2"].value) if s11 is not None else ""
     position = ""
     as_of = None
+    names = Counter(_s(r[7]) for r in rows11 if _s(r[7]))
+    name = names.most_common(1)[0][0] if names else ""
+    if name and header and name in header:
+        position = header.split(name, 1)[1].strip(" ·")
     if owner_id is None:
-        names = Counter(_s(r[7]) for r in rows11 if _s(r[7]))
-        if not names:
+        if not name:
             raise ImportError_("ไม่พบชื่อพนักงานสอบสวนในชีต 1.1 กรุณาเลือกเจ้าของข้อมูล")
-        name = names.most_common(1)[0][0]
-        if header and name in header:
-            position = header.split(name, 1)[1].strip(" ·")
         owner_id, _ = get_or_create_owner(db, name, position)
+    elif name:  # ชุดข้อมูลส่วนตัวที่ยังไม่มีชื่อ: ใช้ชื่อจากรายงาน
+        db.execute("UPDATE owners SET name = ? WHERE id = ? AND name = ''", (name, owner_id))
     m = re.search(r"ข้อมูล ณ วันที่\s*([0-9]+\s*\S+\s*[0-9]{4})", header or "")
     if m:
         as_of = to_iso(m[1])
     stats = Counter()
 
-    cache = CaseCache(db)
+    cache = CaseCache(db, [owner_id])
 
     def put(case_id, fields, in_tpo=None, criminal_no=None):
         """คืน Case ID ที่ใช้จริง (คดีที่ไม่มี Case ID ใช้รหัสภายในจากเลขคดีอาญา)"""
@@ -254,18 +254,15 @@ def import_report(db, wb, *, owner_id=None, allow_move=True):
                 return None
             case_id = placeholder_case_id(criminal_no)
             fields = {**fields, "no_case_id": 1}
-        res = upsert_case(db, owner_id, case_id, fields, in_tpo=in_tpo, force_owner=allow_move,
-                          allow_move=allow_move, cache=cache)
-        stats[res] += 1
-        return None if res == "locked" else case_id
+        stats[upsert_case(db, owner_id, case_id, fields, in_tpo=in_tpo, cache=cache)] += 1
+        return case_id
 
     for r in rows11:
         put(r[1], {"report_date": to_iso(r[2]), "victim": _s(r[3]), "case_type": _s(r[4]),
                    "damage": _num(r[5]), "tpo_criminal_no": _s(r[6]),
                    "system_investigator": _s(r[7]), "status": _s(r[8])}, in_tpo=True)
     for r in _rows(_sheet(wb, "1.2"), 5):
-        known = cache.get(_s(r[1]))
-        exists = known is not None and known["owner_id"] == owner_id
+        exists = cache.get(owner_id, _s(r[1])) is not None
         # ชื่อ/สถานะใช้จากข้อ 1.1 ถ้ามีอยู่แล้ว
         put(r[1], {"statement_taken": 1} if exists else
             {"statement_taken": 1, "victim": _s(r[2]), "status": _s(r[3])})
@@ -293,8 +290,9 @@ def import_report(db, wb, *, owner_id=None, allow_move=True):
                          "backlog_evidence": _s(r[11])}, criminal_no=no)
         if not cid:
             continue
-        cur = db.execute("SELECT * FROM cases WHERE case_id = ?", (cid,)).fetchone()
-        if cur is None or cur["owner_id"] != owner_id:
+        cur = db.execute("SELECT * FROM cases WHERE owner_id = ? AND case_id = ?",
+                         (owner_id, cid)).fetchone()
+        if cur is None:
             continue
         # ข้อ 1.5 อาจใช้ชื่อ/ความเสียหาย/วันที่ต่างจากข้อมูลหลัก เก็บแยกไว้เฉพาะที่ต่าง
         extra = {}
@@ -327,4 +325,4 @@ def import_report(db, wb, *, owner_id=None, allow_move=True):
                "position = CASE WHEN position = '' THEN ? ELSE position END WHERE id = ?",
                ("\n".join(notes), as_of, position, owner_id))
     return {"owner_id": owner_id, "rows": sum(stats.values()), "created": stats["created"],
-            "updated": stats["updated"], "locked": stats["locked"]}
+            "updated": stats["updated"], "locked": 0}

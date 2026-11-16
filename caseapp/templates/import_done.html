@@ -19,16 +19,15 @@
   <div class="stat"><div class="k">Case ID ใหม่</div><div class="v">{{ s.created }}</div></div>
   <div class="stat"><div class="k">อัปเดตของเดิม</div><div class="v">{{ s.updated }}</div></div>
   {% if s.skipped %}<div class="stat"><div class="k">ข้าม (ไม่ได้เลือก)</div><div class="v">{{ s.skipped }}</div></div>{% endif %}
-  {% if s.locked %}<div class="stat"><div class="k">ข้าม (ล็อกเจ้าของไว้)</div><div class="v">{{ s.locked }}</div></div>{% endif %}
 </div>
 <div class="card">
-  <h2 style="margin-top:0">แยกตามเจ้าของข้อมูล</h2>
+  <h2 style="margin-top:0">รายงานที่ได้</h2>
   <table class="summary">
-    <thead><tr><th>เจ้าของ</th><th>จำนวนแถว</th><th></th></tr></thead>
-    <tbody>{% for name, n in s.owners.items() %}
-      <tr><td>{{ name }}</td><td class="n">{{ n }}</td>
-        <td>{% if owner_ids[name] %}<a class="btn small primary" href="{{ url_for('owner_view', owner_id=owner_ids[name]) }}">ดูรายงาน</a>
-            <a class="btn small" href="{{ url_for('owner_export', owner_id=owner_ids[name]) }}">ดาวน์โหลด Excel</a>{% endif %}</td></tr>
+    <thead><tr><th>รายงาน</th><th>จำนวนแถว</th><th></th></tr></thead>
+    <tbody>{% for label, oid, n in s.owners %}
+      <tr><td>{{ label }}</td><td class="n">{{ n }}</td>
+        <td><a class="btn small primary" href="{{ url_for('owner_view', owner_id=oid) }}">ดูรายงาน</a>
+            <a class="btn small" href="{{ url_for('owner_export', owner_id=oid) }}" data-download>ดาวน์โหลด Excel</a></td></tr>
     {% endfor %}</tbody>
   </table>
 </div>

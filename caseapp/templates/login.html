@@ -1,12 +1,12 @@
 {% extends "_auth.html" %}
-{% block title %}เข้าสู่ระบบ · {{ unit_short }}{% endblock %}
+{% block title %}เข้าสู่ระบบผู้ดูแล · {{ unit_short }}{% endblock %}
 {% block card %}
 {% if first_run %}
-<h1>เข้าสู่ระบบครั้งแรก</h1>
+<h1>เข้าสู่ระบบผู้ดูแลครั้งแรก</h1>
 <div class="first-run">
-  <b>ระบบยังไม่มีบัญชีผู้ใช้</b>
+  <b>ระบบยังไม่มีผู้ดูแล</b>
   ชื่อผู้ใช้และรหัสผ่านที่กรอกครั้งนี้จะถูกบันทึกเป็น <b>ผู้ดูแลระบบ (admin)</b>
-  — จดไว้ให้ดี ใช้เข้าสู่ระบบครั้งต่อไปและใช้สร้างรหัสให้คนในกอง
+  — จดไว้ให้ดี ใช้เข้าสู่ระบบครั้งต่อไป (ดูบันทึกการใช้งาน / จัดการข้อมูลทุกชุด)
 </div>
 <form method="post">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
@@ -17,14 +17,14 @@
   <button class="btn primary" type="submit">เข้าสู่ระบบ และบันทึกเป็นผู้ดูแลระบบ</button>
 </form>
 {% else %}
-<h1>เข้าสู่ระบบ</h1>
-<p class="sub">แต่ละบัญชีเห็นเฉพาะข้อมูลคดีของตัวเอง</p>
+<h1>เข้าสู่ระบบผู้ดูแล</h1>
+<p class="sub">สำหรับผู้ดูแลระบบเท่านั้น — ผู้ใช้ทั่วไปใช้งานได้เลยโดยไม่ต้องเข้าสู่ระบบ</p>
 <form method="post">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}">
   <p><label>ชื่อผู้ใช้</label><input type="text" name="username" required autofocus autocomplete="username" autocapitalize="none"></p>
   <p><label>รหัสผ่าน</label><input type="password" name="password" required autocomplete="current-password"></p>
-  <button class="btn primary" type="submit">เข้าสู่ระบบ</button>
+  <button class="btn primary" type="submit">เข้าสู่ระบบผู้ดูแล</button>
 </form>
-{% if register_open %}<div class="auth-alt">ยังไม่มีบัญชี? <a href="{{ url_for('register') }}">สมัครสมาชิก</a></div>{% endif %}
 {% endif %}
+<div class="auth-alt"><a href="{{ url_for('index') }}">← กลับไปใช้งานทั่วไป (ไม่ต้องเข้าสู่ระบบ)</a></div>
 {% endblock %}

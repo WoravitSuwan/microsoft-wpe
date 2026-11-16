@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ owner.name }} · รายงานข้อมูลคดี{% endblock %}
+{% block title %}{{ owner_label(owner) }} · รายงานข้อมูลคดี{% endblock %}
 {% macro edit(c, tab) %}<a class="btn small" href="{{ url_for('case_edit', case_pk=c.id, back=url_for('owner_view', owner_id=owner.id, tab=tab)) }}">แก้ไข</a>{% endmacro %}
 {% macro cid(c) %}{% if c.no_case_id %}<span class="badge muted">ไม่มี Case ID</span>{% else %}{{ c.case_id }}{% endif %}{% endmacro %}
 {% macro search(tid) %}
@@ -38,10 +38,11 @@
   <div class="grid-bg"></div>
   {{ emblem("hero", "emblem hero-emblem") }}
   <div class="eyebrow">{{ unit_short }} · รายงานข้อมูลคดีและ Case ID</div>
-  <h1>{{ owner.name }}</h1>
-  <p class="sub">{{ owner.position or 'ยังไม่ระบุตำแหน่ง/สังกัด' }} · ข้อมูล ณ วันที่ {{ rep.as_of|th }}</p>
+  <h1>{{ owner.name or 'รายงานของฉัน' }}</h1>
+  <p class="sub">{{ owner.position or ('ยังไม่ระบุชื่อ — ตั้งได้ที่แท็บตั้งค่ารายงาน หรือตอนดาวน์โหลด' if not owner.name else 'ยังไม่ระบุตำแหน่ง/สังกัด') }} · ข้อมูล ณ วันที่ {{ rep.as_of|th }}
+    {% if is_admin %} · <span class="badge {{ 'muted' if owner.token else '' }}">{{ 'ชุดข้อมูลส่วนตัวของผู้ใช้' if owner.token else 'ผู้ดูแลนำเข้า' }}</span>{% endif %}</p>
   <div class="row" style="margin-top:16px">
-    <a class="btn primary" href="{{ url_for('owner_export', owner_id=owner.id) }}">⬇ ดาวน์โหลด Excel (แบบเอกสารแนบ)</a>
+    <a class="btn primary" href="{{ url_for('owner_export', owner_id=owner.id) }}" data-download data-name="{{ owner.name }}">⬇ ดาวน์โหลด Excel (แบบเอกสารแนบ)</a>
     <a class="btn" href="{{ url_for('import_view') }}">นำเข้าไฟล์ใหม่</a>
     <a class="btn" href="{{ url_for('case_new', owner_id=owner.id) }}">+ เพิ่ม Case ID</a>
     <a class="btn" href="{{ url_for('owner_view', owner_id=owner.id, tab='settings') }}#danger">ลบข้อมูล</a>
@@ -104,7 +105,7 @@
       <tr><td class="num">{{ idx }}</td><td class="nowrap">{{ c.case_id }}</td><td class="nowrap">{{ c.report_date|ce }}</td>
         <td>{{ c.victim or '' }}</td><td class="clip">{{ c.case_type or '' }}</td><td class="num">{{ c.damage|money }}</td>
         <td class="nowrap">{{ c.tpo_criminal_no or '' }}</td>
-        <td>{% if c.system_investigator and c.system_investigator != owner.name %}<span class="badge warn">{{ c.system_investigator }}</span>{% else %}{{ c.system_investigator or '' }}{% endif %}</td>
+        <td>{% if c.system_investigator and owner.name and c.system_investigator.replace(' ', '') != owner.name.replace(' ', '') %}<span class="badge warn">{{ c.system_investigator }}</span>{% else %}{{ c.system_investigator or '' }}{% endif %}</td>
         <td><span class="badge">{{ c.status or '' }}</span></td>
         <td>{% if c.statement_taken %}<span class="badge ok">แล้ว</span>{% endif %}</td>
         <td>{{ edit(c, 's11') }}</td></tr>
@@ -196,8 +197,8 @@
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <div class="grid">
       <div><label>ยศ ชื่อ สกุล (เจ้าของข้อมูล)</label>
-        <input type="text" name="name" value="{{ owner.name }}" required>
-        <div class="hint">ต้องตรงกับคอลัมน์ "พนักงานสอบสวน" ใน thaipoliceonline · ใช้ตั้งชื่อไฟล์: {{ report.export_filename(owner.name) }}</div></div>
+        <input type="text" name="name" value="{{ owner.name }}" placeholder="เช่น ว่าที่ ร.ต.ท.ชัชวาลย์ ญะวิญชาญ">
+        <div class="hint">แสดงที่หัวรายงาน · ใช้ตั้งชื่อไฟล์: {{ report.export_filename(owner.name or 'ชื่อ นามสกุล') }}</div></div>
       <div><label>ตำแหน่ง/สังกัด</label><input type="text" name="position" value="{{ owner.position or '' }}" placeholder="สว.(สอบสวน) กก.1 บก.สอท.4"></div>
       <div><label>ข้อมูล ณ วันที่</label><input type="date" name="as_of" value="{{ owner.as_of or '' }}">
         <div class="hint">เว้นว่าง = วันนี้ · ใช้นับอายุคดีข้อ 1.5</div></div>
@@ -210,28 +211,42 @@
     <p><button class="btn primary">บันทึก</button></p>
   </form>
 
-  {% set mine = g.user.role != 'admin' and g.user.owner_id == owner.id %}
+  {% if owner.token %}
+  <div class="card">
+    <h2 style="margin-top:0">ลิงก์ส่วนตัวของรายงานนี้</h2>
+    <p class="sub">รายงานนี้อยู่กับเบราว์เซอร์ที่ใช้งาน — เปิดลิงก์นี้บนเครื่องหรือเบราว์เซอร์อื่นเพื่อใช้ข้อมูลชุดเดิม
+      <b>เก็บเป็นความลับ</b> ใครได้ลิงก์ไปจะเห็นข้อมูลชุดนี้</p>
+    <div class="private-link">
+      <input type="text" id="plink" value="{{ private_link }}" readonly onfocus="this.select()">
+      <button type="button" class="btn" data-copy="#plink">คัดลอก</button>
+    </div>
+  </div>
+  {% endif %}
+
   <form method="post" action="{{ url_for('owner_purge', owner_id=owner.id) }}" class="card danger-zone" id="danger"
-        data-confirm="ยืนยันลบข้อมูลคดีทั้งหมด {{ counts.s11 + counts.s12 }} รายการของ {{ owner.name }}? ลบแล้วกู้คืนไม่ได้">
+        data-confirm="ยืนยันลบข้อมูลคดีทั้งหมด {{ counts.s11 }} รายการของ {{ owner_label(owner) }}? ลบแล้วกู้คืนไม่ได้">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <div class="dz-head">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5M12 18v.01"/></svg>
       <div>
-        <h2>ลบข้อมูล{{ 'ของฉัน' if mine else 'ของ ' ~ owner.name }}ทั้งหมด</h2>
+        <h2>ลบข้อมูล{{ 'ของฉัน' if not is_admin else 'ของ ' ~ owner_label(owner) }}ทั้งหมด</h2>
         <p class="sub">ข้อมูลคดีเป็นข้อมูลลับ (ชื่อ เบอร์โทร รายละเอียดผู้เสียหาย) — ลบออกจากระบบเมื่อไม่ใช้แล้ว
-          จะลบเฉพาะของ <b>{{ owner.name }}</b> เท่านั้น ข้อมูลของคนอื่นไม่ถูกแตะต้อง</p>
+          จะลบเฉพาะรายงานนี้เท่านั้น ข้อมูลของคนอื่นไม่ถูกแตะต้อง</p>
       </div>
     </div>
     <ul class="dz-list">
       <li>คดีทั้งหมดในข้อ 1.1–1.5 และข้อมูลที่กรอกในเว็บ (สอบปากคำ, คดีอาญา, ค้างเกิน 6 เดือน)</li>
-      <li>หมายเหตุและวันที่ในหน้าตั้งค่ารายงาน{% if mine %} และประวัติการนำเข้าไฟล์ของคุณ{% endif %}</li>
-      <li>ไฟล์ที่อัปโหลดค้างอยู่ในระบบ</li>
+      <li>หมายเหตุและวันที่ในหน้าตั้งค่ารายงาน{% if owner.token %} ประวัติการนำเข้า และไฟล์ที่อัปโหลดค้าง{% endif %}</li>
     </ul>
     <div class="grid" style="align-items:end">
-      <div><label>ยืนยันด้วยรหัสผ่านของคุณ</label><input type="password" name="password" required autocomplete="current-password"></div>
-      {% if mine %}
+      {% if is_admin %}
+      <div><label>ยืนยันด้วยรหัสผ่านผู้ดูแล</label><input type="password" name="password" required autocomplete="current-password"></div>
+      {% else %}
+      <div><label>พิมพ์คำว่า <b>ลบ</b> เพื่อยืนยัน</label><input type="text" name="confirm" required autocomplete="off"></div>
+      {% endif %}
+      {% if owner.token %}
       <div><label style="font-weight:400;display:flex;gap:8px;align-items:center">
-        <input type="checkbox" name="delete_account" value="1"> ลบบัญชีผู้ใช้ของฉันด้วย (ออกจากระบบทันที)</label></div>
+        <input type="checkbox" name="delete_workspace" value="1"> ลบชุดข้อมูลและลิงก์ส่วนตัวด้วย (เริ่มใหม่ทั้งหมด)</label></div>
       {% endif %}
       <div><button class="btn danger-solid">ลบข้อมูลทั้งหมด</button></div>
     </div>
