@@ -541,3 +541,47 @@ def test_admin_purges_someones_cases_keeps_account(app, admin):
     assert B in owner_ids(app)  # ผู้ดูแลลบเฉพาะคดี ไม่ลบบัญชี/ตัวเอง
     assert admin.get("/").status_code == 200
     assert "ลบข้อมูล" in admin.get(f"/owners/{ids[B]}?tab=settings").get_data(as_text=True)
+
+
+def test_admin_reset_keep_admin(app, admin):
+    do_import(admin, tpo_file(ROWS))
+    admin.post("/admin/users", data={"action": "registration", "code": "unit-code-1"})
+    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
+                                     "role": "officer", "owner_id": owner_ids(app)[A]})
+    # ยืนยันไม่ครบ: ไม่ลบ
+    admin.post("/admin/reset", data={"password": "secret1", "confirm": "ลบ"})
+    admin.post("/admin/reset", data={"password": "wrong", "confirm": "ลบทั้งหมด"})
+    assert len(owner_ids(app)) == 2
+    r = admin.post("/admin/reset", data={"password": "secret1", "confirm": "ลบทั้งหมด", "mode": "keep"},
+                   follow_redirects=True)
+    assert "ล้างข้อมูลทั้งระบบแล้ว" in r.get_data(as_text=True)
+    from caseapp.db import get_db
+    with app.app_context():
+        db = get_db()
+        assert [x[0] for x in db.execute("SELECT username FROM users")] == ["admin"]
+        for t in ("cases", "owners", "imports", "uploads", "settings"):
+            assert db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0, t
+    assert "ปิดรับสมัคร" in app.test_client().get("/register").get_data(as_text=True)
+    assert admin.get("/").status_code == 200  # ยังอยู่ในระบบ
+
+
+def test_admin_reset_all_then_first_signup_is_admin(app, admin):
+    do_import(admin, tpo_file(ROWS))
+    r = admin.post("/admin/reset", data={"password": "secret1", "confirm": "ลบทั้งหมด", "mode": "all"})
+    assert r.headers["Location"].endswith("/setup")
+    c = app.test_client()
+    page = c.get("/", follow_redirects=True).get_data(as_text=True)
+    assert "สมัครผู้ดูแลระบบ (คนแรก)" in page
+    c.post("/setup", data={"username": "newadmin", "password": "secret2"})
+    assert "ผู้ใช้งาน" in c.get("/").get_data(as_text=True)
+    assert owner_ids(app) == {}
+    assert app.test_client().post("/admin/reset", data={}).status_code in (302, 403)
+
+
+def test_officer_cannot_reset(app, admin):
+    admin.post("/admin/owners", data={"action": "create", "name": A})
+    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
+                                     "role": "officer", "owner_id": owner_ids(app)[A]})
+    off = app.test_client()
+    off.post("/login", data={"username": "a", "password": "secret1"})
+    assert off.post("/admin/reset", data={"password": "secret1", "confirm": "ลบทั้งหมด"}).status_code == 403

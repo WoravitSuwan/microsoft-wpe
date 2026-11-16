@@ -46,4 +46,30 @@
   </div>
   <p><button class="btn primary">เพิ่มผู้ใช้</button></p>
 </form>
+
+<form method="post" action="{{ url_for('admin_reset') }}" class="card danger-zone" id="reset"
+      data-confirm="ยืนยันล้างข้อมูลทั้งระบบ? คดี บัญชีผู้ใช้ และประวัติทั้งหมดจะถูกลบ กู้คืนไม่ได้">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <div class="dz-head">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5M12 18v.01"/></svg>
+    <div>
+      <h2>ล้างข้อมูลทั้งระบบ</h2>
+      <p class="sub">ใช้เมื่อต้องการเริ่มใหม่ — ลบคดีของทุกคน รายชื่อเจ้าของข้อมูล ประวัติการนำเข้า ไฟล์ที่ค้าง
+        บัญชีผู้ใช้อื่นทั้งหมด และปิดรับสมัคร (รหัสลงทะเบียนเดิมใช้ไม่ได้)</p>
+    </div>
+  </div>
+  <div class="grid" style="margin-bottom:12px">
+    <label style="font-weight:400;display:flex;gap:8px;align-items:flex-start">
+      <input type="radio" name="mode" value="keep" checked style="margin-top:4px">
+      <span><b>เก็บบัญชีผู้ดูแลของฉันไว้</b> (แนะนำ)<span class="hint">ลบเสร็จยังอยู่ในระบบ แล้วตั้งรหัสลงทะเบียนใหม่ได้ทันที</span></span></label>
+    <label style="font-weight:400;display:flex;gap:8px;align-items:flex-start">
+      <input type="radio" name="mode" value="all" style="margin-top:4px">
+      <span><b>ลบทุกอย่างรวมบัญชีของฉัน</b><span class="hint">ระบบกลับเป็นค่าเริ่มต้น คนแรกที่เปิดเว็บจะได้เป็นผู้ดูแลระบบ</span></span></label>
+  </div>
+  <div class="grid" style="align-items:end">
+    <div><label>พิมพ์คำว่า <b>ลบทั้งหมด</b></label><input type="text" name="confirm" required autocomplete="off"></div>
+    <div><label>รหัสผ่านของคุณ</label><input type="password" name="password" required autocomplete="current-password"></div>
+    <div><button class="btn danger-solid">ล้างข้อมูลทั้งระบบ</button></div>
+  </div>
+</form>
 {% endblock %}

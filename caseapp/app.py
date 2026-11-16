@@ -773,6 +773,40 @@ def _register(app):
                                register_code=get_setting(db, "register_code") or "",
                                suggest_code=secrets.token_hex(4))
 
+    @app.route("/admin/reset", methods=["POST"])
+    @admin_required
+    def admin_reset():
+        """ล้างข้อมูลทั้งระบบ (ผู้ดูแลเท่านั้น) ต้องยืนยันด้วยรหัสผ่าน + พิมพ์คำว่า "ลบทั้งหมด"
+
+        mode=keep: ลบคดี เจ้าของ ประวัติ ไฟล์ค้าง ผู้ใช้อื่นทั้งหมด และปิดรับสมัคร เหลือบัญชีผู้ดูแลที่กดลบ
+        mode=all : ลบทุกอย่างรวมบัญชีตัวเอง → ระบบกลับเป็นค่าเริ่มต้น (คนแรกที่เปิดเว็บเป็นผู้ดูแล)
+        """
+        db = get_db()
+        back = url_for("users") + "#reset"
+        if not check_password_hash(g.user["password_hash"], request.form.get("password", "")):
+            flash("รหัสผ่านไม่ถูกต้อง ยังไม่ได้ลบข้อมูล", "error")
+            return redirect(back)
+        if (request.form.get("confirm") or "").strip() != "ลบทั้งหมด":
+            flash('กรุณาพิมพ์คำว่า "ลบทั้งหมด" เพื่อยืนยัน', "error")
+            return redirect(back)
+        n_cases = db.execute("SELECT COUNT(*) FROM cases").fetchone()[0]
+        n_users = db.execute("SELECT COUNT(*) FROM users WHERE id != ?", (g.user["id"],)).fetchone()[0]
+        for table in ("cases", "uploads", "imports"):
+            db.execute(f"DELETE FROM {table}")
+        db.execute("UPDATE users SET owner_id = NULL")
+        db.execute("DELETE FROM owners")
+        db.execute("DELETE FROM users WHERE id != ?", (g.user["id"],))
+        db.execute("DELETE FROM settings")  # ปิดรับสมัคร: รหัสลงทะเบียนเดิมใช้ไม่ได้อีก
+        if request.form.get("mode") == "all":
+            db.execute("DELETE FROM users")
+            db.commit()
+            session.clear()
+            return redirect(url_for("setup"))
+        db.commit()
+        flash(f"ล้างข้อมูลทั้งระบบแล้ว: คดี {n_cases:,} รายการ, บัญชีผู้ใช้อื่น {n_users:,} บัญชี "
+              "— ตั้งรหัสลงทะเบียนใหม่เพื่อให้คนในกองสมัคร", "ok")
+        return redirect(url_for("users"))
+
     @app.route("/admin/owners", methods=["POST"])
     @admin_required
     def owners_admin():
