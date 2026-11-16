@@ -1,7 +1,13 @@
 {% extends "base.html" %}
+{% from "_emblem.html" import emblem %}
 {% block content %}
-<h1>นำเข้าไฟล์ Excel</h1>
-<p class="sub">ระบบตรวจรูปแบบไฟล์ให้อัตโนมัติ และให้เลือกได้ว่าจะนำเข้าคดีของพนักงานสอบสวนคนใดบ้าง ข้อมูลที่กรอกในเว็บแล้ว (สอบปากคำ, คดีอาญา, ค้างเกิน 6 เดือน) จะไม่ถูกลบเมื่อนำเข้าซ้ำ</p>
+<section class="hero">
+  <div class="grid-bg"></div>
+  {{ emblem("hero", "emblem hero-emblem") }}
+  <div class="eyebrow">{{ unit_short }} · ขั้นตอนที่ 1 → 2 → 3</div>
+  <h1>นำเข้าไฟล์ Excel</h1>
+  <p class="sub">อัปโหลด → เลือกพนักงานสอบสวน → ได้รายงานแบบเอกสารแนบ · ข้อมูลที่กรอกในเว็บแล้ว (สอบปากคำ, คดีอาญา, ค้างเกิน 6 เดือน) จะไม่ถูกลบเมื่อนำเข้าซ้ำ</p>
+</section>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-bottom:18px">
   <div class="card" style="margin:0"><b>ไฟล์ export จาก thaipoliceonline</b>
     <p class="hint">เช่น ค่าเริ่มต้น__20261116_083829.xlsx — ใช้ทำข้อ 1.1 และแยกเจ้าของตามคอลัมน์ "พนักงานสอบสวน"</p></div>
@@ -20,13 +26,15 @@
     </select>
     <span class="hint">เลือกเจ้าของคนเดียวเมื่อคดีในไฟล์ยังระบุพนักงานสอบสวนคนเดิม แต่โอนมาอยู่ในความรับผิดชอบของคนใหม่แล้ว</span></p>
   {% else %}
-  <p class="hint">คดีที่เลือกนำเข้าจะเป็นของคุณ ({{ my_name }})</p>
+  <p class="hint">ใช้ไฟล์ export ของ thaipoliceonline ได้ทั้งไฟล์ของตัวเองหรือไฟล์รวมของกอง — ระบบจะติ๊กคดีของ <b>{{ my_name }}</b> ไว้ให้
+    และคดีที่เลือกทั้งหมดจะเป็นของคุณ (คดีที่มีเจ้าของคนอื่นในระบบแล้วจะถูกข้าม)</p>
   {% endif %}
   <p class="hint">หลังอัปโหลด ระบบจะแสดงรายชื่อพนักงานสอบสวนในไฟล์ ให้เลือกเฉพาะคนที่ต้องการนำเข้า</p>
   <div class="row" id="import-actions">
     <button class="btn primary" id="import-btn">อัปโหลดและเลือกคดี</button>
     <span class="hint" id="import-status" role="status"></span>
   </div>
+  <div class="progress" id="import-progress" hidden><span></span></div>
   <fieldset id="pick" hidden style="margin-top:14px">
     <legend>เลือกพนักงานสอบสวนที่จะนำเข้า</legend>
     <p class="hint" id="pick-summary" style="margin-top:0"></p>
@@ -69,8 +77,19 @@
     try { var j = await res.clone().json(); if (j && j.error) return j.error; } catch (_) {}
     return statusText(res.status);
   }
-  function say(el, msg, bad) { el.textContent = msg; el.style.color = bad ? 'var(--err)' : ''; }
-  function fail(msg) { say(status, msg, true); btn.disabled = false; }
+  var prog = document.getElementById('import-progress');
+  function setProgress(pct, done) {
+    prog.hidden = false; prog.classList.toggle('done', !!done);
+    prog.firstElementChild.style.width = Math.max(3, Math.min(100, pct)) + '%';
+  }
+  // busy=true: แสดงเรดาร์หมุนหน้าข้อความ
+  function say(el, msg, bad, busy) {
+    el.textContent = '';
+    if (busy) { var r = document.createElement('span'); r.className = 'radar'; el.appendChild(r); }
+    el.appendChild(document.createTextNode(msg));
+    el.style.color = bad ? 'var(--err)' : '';
+  }
+  function fail(msg) { say(status, msg, true); btn.disabled = false; prog.hidden = true; if (window.UI) UI.endBar(); }
   function baseForm() {
     var fd = new FormData();
     fd.append('csrf', csrf); fd.append('token', upload.token);
@@ -82,12 +101,18 @@
   async function finish(names, statusEl) {
     var fd = baseForm();
     if (names) { fd.append('select', '1'); names.forEach(function (n) { fd.append('names', n); }); }
-    say(statusEl, 'กำลังนำเข้าข้อมูล… (ไฟล์ใหญ่อาจใช้เวลาสักครู่)');
+    say(statusEl, 'กำลังนำเข้าข้อมูล… (ไฟล์ใหญ่อาจใช้เวลาสักครู่)', false, true);
+    setProgress(92);
     var res = await fetch('{{ url_for("import_finish") }}', {method: 'POST', body: fd, credentials: 'same-origin'});
     var out = {};
     try { out = await res.clone().json(); } catch (_) {}
-    if (res.ok && out.url) { window.location = out.url; return true; }
+    if (res.ok && out.url) {
+      setProgress(100, true); say(statusEl, 'นำเข้าสำเร็จ กำลังเปิดผลลัพธ์…');
+      if (window.UI) UI.startBar();
+      window.location = out.url; return true;
+    }
     say(statusEl, await errorOf(res), true);
+    prog.hidden = true; if (window.UI) UI.endBar();
     return false;
   }
   function checked() {
@@ -99,14 +124,21 @@
     goBtn.textContent = 'นำเข้าคดีของคนที่เลือก (' + checked().length + ' คน, ' + n.toLocaleString() + ' คดี)';
     goBtn.disabled = checked().length === 0;
   }
+  function key(n) { return String(n || '').replace(/\s+/g, ''); }
   function showPick(info) {
     list.textContent = '';
+    if (MY_NAME) {  // ชื่อตัวเองขึ้นก่อน
+      info.investigators.sort(function (a, b) {
+        return (key(b.name) === key(MY_NAME)) - (key(a.name) === key(MY_NAME));
+      });
+    }
     info.investigators.forEach(function (p) {
       var lab = document.createElement('label');
-      lab.style.cssText = 'display:flex;gap:8px;align-items:center;font-weight:400;padding:4px 0';
+      lab.style.cssText = 'display:flex;gap:8px;align-items:center;font-weight:400;padding:5px 4px;border-radius:8px;' +
+        'opacity:0;animation:rowIn .45s cubic-bezier(.2,.8,.2,1) forwards;animation-delay:' + Math.min(list.childElementCount, 25) * 25 + 'ms';
       var cb = document.createElement('input');
       cb.type = 'checkbox'; cb.value = p.name; cb.dataset.rows = p.rows;
-      cb.checked = !!MY_NAME && p.name === MY_NAME;
+      cb.checked = !!MY_NAME && key(p.name) === key(MY_NAME);
       cb.addEventListener('change', updateCount);
       var name = document.createElement('span'); name.textContent = p.name; name.style.flex = '1';
       var n = document.createElement('span'); n.className = 'badge'; n.textContent = p.rows.toLocaleString() + ' คดี';
@@ -119,7 +151,8 @@
     });
     say(document.getElementById('pick-summary'), 'ไฟล์ ' + upload.filename + ' มี ' + info.rows.toLocaleString() +
         ' คดี จากพนักงานสอบสวน ' + info.investigators.length + ' คน — คนที่ไม่ได้เลือกจะไม่ถูกนำเข้า');
-    say(pickStatus, '');
+    var mine = MY_NAME && info.investigators.some(function (p) { return key(p.name) === key(MY_NAME); });
+    say(pickStatus, MY_NAME && !mine ? 'ไม่พบชื่อ "' + MY_NAME + '" ในไฟล์นี้ — ตรวจว่าชื่อในหน้าตั้งค่ารายงานตรงกับคอลัมน์พนักงานสอบสวน' : '', MY_NAME && !mine);
     updateCount();
     pick.hidden = false;
     document.getElementById('import-actions').hidden = true;
@@ -142,7 +175,7 @@
   };
   document.getElementById('pick-cancel').onclick = function () {
     pick.hidden = true; document.getElementById('import-actions').hidden = false;
-    btn.disabled = false; say(status, ''); upload = null;
+    btn.disabled = false; say(status, ''); upload = null; prog.hidden = true;
   };
   goBtn.onclick = async function () {
     var names = checked();
@@ -165,7 +198,8 @@
     var chunks = Math.max(1, Math.ceil(file.size / CHUNK));
     try {
       for (var i = 0; i < chunks; i++) {
-        say(status, 'กำลังอัปโหลด ' + Math.round(i / chunks * 100) + '%');
+        say(status, 'กำลังอัปโหลด ' + Math.round(i / chunks * 100) + '%', false, true);
+        setProgress(5 + 70 * i / chunks);
         var r = await fetch('{{ url_for("import_chunk") }}', {
           method: 'POST', credentials: 'same-origin',
           headers: {'X-CSRF-Token': csrf, 'X-Upload-Token': token, 'X-Chunk-Index': String(i),
@@ -175,12 +209,15 @@
         if (!r.ok) throw new Error('อัปโหลดส่วนที่ ' + (i + 1) + '/' + chunks + ' ไม่สำเร็จ: ' + await errorOf(r));
       }
       upload = {token: token, chunks: chunks, filename: file.name};
-      say(status, 'กำลังอ่านรายชื่อพนักงานสอบสวนในไฟล์…');
+      say(status, 'กำลังอ่านรายชื่อพนักงานสอบสวนในไฟล์…', false, true);
+      setProgress(80);
       var fd = baseForm();
       var res = await fetch('{{ url_for("import_inspect") }}', {method: 'POST', body: fd, credentials: 'same-origin'});
       if (!res.ok) return fail(await errorOf(res));
       var info = await res.json();
-      if (info.kind === 'tpo' && info.investigators.length > 1) { say(status, ''); return showPick(info); }
+      var onlyMine = info.kind === 'tpo' && info.investigators.length === 1 &&
+                     (!MY_NAME || key(info.investigators[0].name) === key(MY_NAME));
+      if (info.kind === 'tpo' && !onlyMine) { say(status, ''); setProgress(85, true); return showPick(info); }
       // ไฟล์รายงานเดิม หรือมีพนักงานสอบสวนคนเดียว: นำเข้าเลย
       var names = info.kind === 'tpo' ? info.investigators.map(function (p) { return p.name; }) : null;
       if (!await finish(names, status)) btn.disabled = false;

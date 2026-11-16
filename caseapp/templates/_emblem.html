@@ -1,0 +1,28 @@
+{# ตราสัญลักษณ์ของระบบ (ออกแบบใหม่ ไม่ใช่ตราราชการ): โล่ + เรดาร์ + ลายวงจร #}
+{% macro emblem(uid="e", cls="emblem") %}
+<svg class="{{ cls }}" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="{{ uid }}-gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f6e3a6"/><stop offset=".55" stop-color="#d4ae58"/><stop offset="1" stop-color="#9c7426"/>
+    </linearGradient>
+    <radialGradient id="{{ uid }}-core" cx=".5" cy=".45" r=".6">
+      <stop offset="0" stop-color="#173c70"/><stop offset="1" stop-color="#071428"/>
+    </radialGradient>
+    <linearGradient id="{{ uid }}-sweep" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0"/><stop offset="1" stop-color="#22d3ee" stop-opacity=".75"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 4 L54 12 V30 C54 44 44 54 32 60 C20 54 10 44 10 30 V12 Z" fill="url(#{{ uid }}-core)"/>
+  <path class="em-shield" d="M32 4 L54 12 V30 C54 44 44 54 32 60 C20 54 10 44 10 30 V12 Z" fill="none" stroke="url(#{{ uid }}-gold)" stroke-width="2.6" stroke-linejoin="round"/>
+  <g class="em-circuit" stroke="#22d3ee" stroke-width="1.3" fill="none" stroke-linecap="round" opacity=".85">
+    <path d="M17 20 H23 L26 23"/><path d="M47 20 H41 L38 23"/><path d="M17 42 H22 L25 39"/><path d="M47 42 H42 L39 39"/>
+  </g>
+  <g fill="#22d3ee"><circle class="em-dot" cx="17" cy="20" r="1.6"/><circle class="em-dot" cx="47" cy="20" r="1.6"/>
+    <circle class="em-dot" cx="17" cy="42" r="1.6"/><circle class="em-dot" cx="47" cy="42" r="1.6"/></g>
+  <circle cx="32" cy="31" r="11" fill="none" stroke="url(#{{ uid }}-gold)" stroke-width="1.6"/>
+  <circle cx="32" cy="31" r="6" fill="none" stroke="#22d3ee" stroke-width=".9" opacity=".6"/>
+  <path d="M32 19 V43 M20 31 H44" stroke="#22d3ee" stroke-width=".7" opacity=".45"/>
+  <path class="em-sweep" d="M32 31 L43 31 A11 11 0 0 0 39.8 23.2 Z" fill="url(#{{ uid }}-sweep)"/>
+  <circle cx="32" cy="31" r="1.8" fill="#e8cd85"/>
+</svg>
+{% endmacro %}

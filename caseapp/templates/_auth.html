@@ -1,0 +1,18 @@
+{# โครงหน้าเข้าสู่ระบบ/สมัคร/ตั้งค่าครั้งแรก: พื้นหลังเครือข่ายเคลื่อนไหว + การ์ดกระจก #}
+{% extends "base.html" %}
+{% from "_emblem.html" import emblem %}
+{% block body_class %}auth{% endblock %}
+{% block chrome %}<canvas id="net" aria-hidden="true"></canvas>{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+  <div class="auth-head">
+    {{ emblem("auth") }}
+    <div class="unit">{{ unit_short }}</div>
+    <div class="title">ระบบรายงานข้อมูลคดีและ Case ID</div>
+    <div class="unit-full">{{ unit_full }}</div>
+  </div>
+  <div class="auth-card">
+    {% block card %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

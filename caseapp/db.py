@@ -83,6 +83,13 @@ CREATE TABLE IF NOT EXISTS imports (
     created_at TEXT DEFAULT {NOW}
 );
 
+-- ค่าตั้งระบบ เช่น รหัสลงทะเบียนสมาชิก
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL UNIQUE,
+    value TEXT
+);
+
 -- ไฟล์ที่อัปโหลดเป็นส่วน ๆ (Vercel รับคำขอได้ไม่เกิน 4.5 MB) ลบทิ้งหลังนำเข้า
 CREATE TABLE IF NOT EXISTS uploads (
     id INTEGER PRIMARY KEY,
@@ -250,9 +257,30 @@ def init_db(app):
     app.teardown_appcontext(close_db)
 
 
+def name_key(name):
+    """ชื่อสำหรับเปรียบเทียบ: ไม่สนช่องว่าง (ระบบต่าง ๆ เว้นวรรคยศ/ชื่อไม่เหมือนกัน)"""
+    return "".join((name or "").split())
+
+
+def find_owner(db, name):
+    return db.execute("SELECT * FROM owners WHERE REPLACE(name, ' ', '') = ?",
+                      (name_key(name),)).fetchone()
+
+
+def get_setting(db, key, default=None):
+    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row is not None else default
+
+
+def set_setting(db, key, value):
+    db.execute("DELETE FROM settings WHERE key = ?", (key,))
+    if value is not None:
+        db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, value))
+
+
 def get_or_create_owner(db, name, position=""):
     name = " ".join((name or "").split())
-    row = db.execute("SELECT * FROM owners WHERE name = ?", (name,)).fetchone()
+    row = find_owner(db, name)
     if row:
         if position and not row["position"]:
             db.execute("UPDATE owners SET position = ? WHERE id = ?", (position, row["id"]))

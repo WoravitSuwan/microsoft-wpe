@@ -8,6 +8,7 @@ from datetime import date
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
+from .db import name_key
 from .thaidate import (be_slash, ce_slash, minus_months, parse_date, thai_short,
                        thai_short_time)
 
@@ -145,9 +146,10 @@ def build(db, owner_id, as_of=None):
 
     rep.s11 = sorted((c for c in cases if c["in_tpo"]),
                      key=lambda c: (_date_key(c["report_date"]), c["id"]))
+    me = name_key(owner["name"])
     rep.other_investigators = Counter(
         c["system_investigator"] for c in rep.s11
-        if c["system_investigator"] and c["system_investigator"] != owner["name"])
+        if c["system_investigator"] and name_key(c["system_investigator"]) != me)
     rep.s12 = sorted((c for c in cases if c["statement_taken"]),
                      key=lambda c: (c["seq12"] is None, c["seq12"] or 0, c["id"]))
     rep.s13 = sorted((c for c in cases if c["criminal_no"]),

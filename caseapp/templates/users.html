@@ -18,6 +18,23 @@
 </table></div>
 {% for u in users %}<form id="u{{ u.id }}" method="post"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="id" value="{{ u.id }}"></form>{% endfor %}
 <form method="post" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="registration">
+  <h2 style="margin-top:0">ให้พนักงานสอบสวนสมัครสมาชิกเอง</h2>
+  {% if register_code %}
+    <p><span class="badge ok">เปิดรับสมัคร</span> ส่งลิงก์และรหัสนี้ให้คนในหน่วย (ทางช่องทางภายใน ไม่โพสต์สาธารณะ)</p>
+    <p>ลิงก์สมัคร: <code>{{ url_for('register', _external=True) }}</code></p>
+  {% else %}
+    <p><span class="badge muted">ปิดรับสมัคร</span> ตั้งรหัสลงทะเบียนเพื่อเปิดให้สมัครเอง</p>
+  {% endif %}
+  <div class="row">
+    <input type="text" name="code" value="{{ register_code }}" placeholder="เช่น {{ suggest_code }}" style="max-width:260px" autocomplete="off">
+    <button class="btn primary">บันทึก</button>
+    {% if register_code %}<button class="btn danger" name="code" value="">ปิดรับสมัคร</button>{% endif %}
+  </div>
+  <p class="hint">ผู้สมัครกรอก ยศ ชื่อ สกุล ให้ตรงกับคอลัมน์ "พนักงานสอบสวน" ระบบจะผูกบัญชีกับข้อมูลของชื่อนั้น (1 ชื่อ 1 บัญชี) ·
+    ลืมรหัสผ่าน: ตั้งรหัสผ่านใหม่ให้ได้ในตารางด้านบน · เปลี่ยนรหัสลงทะเบียนเมื่อมีคนย้ายออก</p>
+</form>
+<form method="post" class="card">
   <input type="hidden" name="csrf" value="{{ csrf_token() }}"><input type="hidden" name="action" value="create">
   <h2 style="margin-top:0">เพิ่มผู้ใช้</h2>
   <div class="grid">

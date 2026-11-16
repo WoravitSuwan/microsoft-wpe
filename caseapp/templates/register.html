@@ -1,0 +1,31 @@
+{% extends "_auth.html" %}
+{% block title %}สมัครสมาชิก · {{ unit_short }}{% endblock %}
+{% block card %}
+  <h1>สมัครสมาชิก</h1>
+  {% if closed %}
+    <p class="sub">ขณะนี้ปิดรับสมัคร กรุณาติดต่อผู้ดูแลระบบของหน่วย</p>
+    <a class="btn" href="{{ url_for('login') }}">กลับไปหน้าเข้าสู่ระบบ</a>
+  {% else %}
+  <p class="sub">บัญชีละ 1 คน — เห็นและแก้ไขได้เฉพาะคดีของตัวเอง</p>
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <p><label>ยศ ชื่อ นามสกุล</label>
+      <input type="text" name="name" value="{{ form.name }}" required placeholder="ว่าที่ ร.ต.ท.ชัชวาลย์ ญะวิญชาญ">
+      <span class="hint">พิมพ์ให้ตรงกับคอลัมน์ "พนักงานสอบสวน" ในไฟล์ thaipoliceonline ระบบจะใช้ชื่อนี้เลือกคดีของคุณ</span></p>
+    <p><label>ตำแหน่ง/สังกัด</label>
+      <input type="text" name="position" value="{{ form.position }}" placeholder="สว.(สอบสวน) กก.1 บก.สอท.4">
+      <span class="hint">แสดงที่หัวรายงาน แก้ภายหลังได้</span></p>
+    <p><label>ชื่อผู้ใช้ (ภาษาอังกฤษ/ตัวเลข)</label>
+      <input type="text" name="username" value="{{ form.username }}" required pattern="[A-Za-z0-9_.@-]{3,40}" autocapitalize="none"></p>
+    <div class="grid">
+      <div><label>รหัสผ่าน (อย่างน้อย 8 ตัว)</label><input type="password" name="password" required minlength="8" autocomplete="new-password"></div>
+      <div><label>ยืนยันรหัสผ่าน</label><input type="password" name="password2" required minlength="8" autocomplete="new-password"></div>
+    </div>
+    <p style="margin-top:14px"><label>รหัสลงทะเบียนของหน่วย</label>
+      <input type="text" name="code" required autocapitalize="none">
+      <span class="hint">ขอจากผู้ดูแลระบบ (กันบุคคลภายนอกสมัครเข้ามาดูข้อมูลผู้เสียหาย)</span></p>
+    <button class="btn primary">สมัครสมาชิก</button>
+  </form>
+  <div class="auth-alt">มีบัญชีแล้ว? <a href="{{ url_for('login') }}">เข้าสู่ระบบ</a></div>
+  {% endif %}
+{% endblock %}
