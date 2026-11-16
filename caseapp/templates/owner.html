@@ -2,12 +2,23 @@
 {% block title %}{{ owner.name }} · รายงานข้อมูลคดี{% endblock %}
 {% macro edit(c, tab) %}<a class="btn small" href="{{ url_for('case_edit', case_pk=c.id, back=url_for('owner_view', owner_id=owner.id, tab=tab)) }}">แก้ไข</a>{% endmacro %}
 {% macro cid(c) %}{% if c.no_case_id %}<span class="badge muted">ไม่มี Case ID</span>{% else %}{{ c.case_id }}{% endif %}{% endmacro %}
-{% macro search(tid, n) %}
-<div class="row" style="margin-bottom:10px">
-  <input type="text" class="search" placeholder="ค้นหา Case ID / ชื่อ / เลขคดี" data-filter="#{{ tid }}" data-count="#{{ tid }}-n">
-  <span class="sub" style="margin:0">แสดง <b id="{{ tid }}-n">{{ n }}</b> รายการ</span>
-</div>
+{% macro search(tid) %}
+<form method="get" class="row" style="margin-bottom:10px">
+  <input type="hidden" name="tab" value="{{ tab }}">
+  <input type="text" name="q" value="{{ q }}" class="search" placeholder="ค้นหา Case ID / ชื่อ / เลขคดี แล้วกด Enter" data-filter="#{{ tid }}" data-count="#{{ tid }}-n">
+  <span class="sub" style="margin:0">
+    {% if q %}พบ {{ total }} รายการ · <a href="?tab={{ tab }}">ล้างการค้นหา</a> · {% endif %}
+    แสดง <b id="{{ tid }}-n">{{ items|length }}</b> รายการ{% if pages > 1 %} (หน้า {{ page }}/{{ pages }}){% endif %}
+  </span>
+</form>
 {% endmacro %}
+{% macro pager() %}{% if pages > 1 %}
+<div class="row" style="margin-top:12px">
+  {% for p in range(1, pages + 1) %}
+    <a class="btn small {{ 'primary' if p == page }}" href="?tab={{ tab }}&page={{ p }}{% if q %}&q={{ q|urlencode }}{% endif %}">{{ p }}</a>
+  {% endfor %}
+</div>
+{% endif %}{% endmacro %}
 {% block content %}
 <div class="row">
   <div>
@@ -63,11 +74,11 @@
 
 {% elif tab == 's11' %}
   <p class="sub">จากไฟล์ export ระบบ thaipoliceonline · คอลัมน์ "พนักงานสอบสวน" คือชื่อตามระบบ (ถ้าไม่ตรงกับเจ้าของจะมีป้ายสีเหลือง)</p>
-  {{ search('t11', rep.s11|length) }}
+  {{ search('t11') }}
   <div class="tbl-wrap"><table class="data" id="t11">
     <thead><tr><th>ลำดับ</th><th>Case ID</th><th>วันที่รับแจ้ง</th><th>ผู้เสียหาย</th><th>ประเภทคดี</th><th>มูลค่าความเสียหาย (บาท)</th><th>เลขคดีอาญา</th><th>พนักงานสอบสวน</th><th>สถานะ</th><th>สอบปากคำ</th><th></th></tr></thead>
-    <tbody>{% for c in rep.s11 %}
-      <tr><td class="num">{{ loop.index }}</td><td class="nowrap">{{ c.case_id }}</td><td class="nowrap">{{ c.report_date|ce }}</td>
+    <tbody>{% for idx, c in items %}
+      <tr><td class="num">{{ idx }}</td><td class="nowrap">{{ c.case_id }}</td><td class="nowrap">{{ c.report_date|ce }}</td>
         <td>{{ c.victim or '' }}</td><td class="clip">{{ c.case_type or '' }}</td><td class="num">{{ c.damage|money }}</td>
         <td class="nowrap">{{ c.tpo_criminal_no or '' }}</td>
         <td>{% if c.system_investigator and c.system_investigator != owner.name %}<span class="badge warn">{{ c.system_investigator }}</span>{% else %}{{ c.system_investigator or '' }}{% endif %}</td>
@@ -76,6 +87,7 @@
         <td>{{ edit(c, 's11') }}</td></tr>
     {% else %}<tr><td colspan="11" class="empty">ยังไม่มีข้อมูล — นำเข้าไฟล์ export thaipoliceonline</td></tr>{% endfor %}</tbody>
   </table></div>
+  {{ pager() }}
 
 {% elif tab == 's12' %}
   <p class="sub">Case ID ที่ดำเนินการสอบปากคำแล้ว (ตาม CCMS: มีสำนวนแล้ว) — ทำเครื่องหมายได้ที่ปุ่มแก้ไข หรือวางรายการ Case ID ด้านล่าง</p>
@@ -88,16 +100,17 @@
       <button class="btn primary">บันทึกว่าสอบปากคำแล้ว</button>
     </form>
   </details>
-  {{ search('t12', rep.s12|length) }}
+  {{ search('t12') }}
   <div class="tbl-wrap"><table class="data" id="t12">
     <thead><tr><th>ลำดับ</th><th>Case ID</th><th>ผู้เสียหาย</th><th>สถานะ (thaipoliceonline)</th><th>หมายเหตุ</th><th></th></tr></thead>
-    <tbody>{% for c in rep.s12 %}
-      <tr><td class="num">{{ loop.index }}</td><td>{{ c.case_id }}</td><td>{{ c.victim or '' }}</td>
+    <tbody>{% for idx, c in items %}
+      <tr><td class="num">{{ idx }}</td><td>{{ c.case_id }}</td><td>{{ c.victim or '' }}</td>
         <td>{% if c.in_tpo %}{{ c.status or '' }}{% endif %}</td>
         <td>{% if c.in_tpo %}อยู่ในรายการ 1.1{% else %}<span class="badge warn">ไม่อยู่ในรายการ 1.1</span>{% endif %}</td>
         <td>{{ edit(c, 's12') }}</td></tr>
     {% else %}<tr><td colspan="6" class="empty">ยังไม่มีรายการ</td></tr>{% endfor %}</tbody>
   </table></div>
+  {{ pager() }}
 
 {% elif tab == 's13' %}
   <p class="sub">Case ID ที่รับเลขคดีอาญา (C.) แล้ว · "สถานะที่รายงาน" คำนวณจากสถานะในระบบ C. เทียบกับสถานะจริง</p>
@@ -110,11 +123,11 @@
       <button class="btn primary">บันทึกข้อมูลคดีอาญา</button>
     </form>
   </details>
-  {{ search('t13', rep.s13|length) }}
+  {{ search('t13') }}
   <div class="tbl-wrap"><table class="data" id="t13">
     <thead><tr><th>ลำดับ</th><th>เลขคดีอาญา</th><th>Case ID</th><th>ผู้ร้องทุกข์</th><th>วันที่รับคำร้องทุกข์</th><th>สถานะในระบบ C.</th><th>สถานะที่รายงาน</th><th></th></tr></thead>
-    <tbody>{% for c in rep.s13 %}{% set st = report.reported_status(c) %}
-      <tr><td class="num">{{ loop.index }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
+    <tbody>{% for idx, c in items %}{% set st = report.reported_status(c) %}
+      <tr><td class="num">{{ idx }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
         <td>{{ c.complainant or c.victim or '' }}</td>
         <td class="nowrap {{ 'missing' if not c.complaint_date }}">{{ c.complaint_date|thtime }}</td>
         <td class="{{ 'missing' if not c.c_status }}">{{ c.c_status or '' }}</td>
@@ -122,26 +135,28 @@
         <td>{{ edit(c, 's13') }}</td></tr>
     {% else %}<tr><td colspan="8" class="empty">ยังไม่มีรายการ</td></tr>{% endfor %}</tbody>
   </table></div>
+  {{ pager() }}
 
 {% elif tab == 's14' %}
   <p class="sub">คดีอาญาที่สถานะในระบบ C. ไม่ตรงกับสถานะจริงของสำนวน (แก้ "สถานะจริง" ได้ที่ปุ่มแก้ไข)</p>
-  {{ search('t14', rep.s14|length) }}
+  {{ search('t14') }}
   <div class="tbl-wrap"><table class="data" id="t14">
     <thead><tr><th>ลำดับ</th><th>เลขคดีอาญา</th><th>Case ID</th><th>ผู้ร้องทุกข์</th><th>สถานะในระบบ C.</th><th>สถานะจริง</th><th>การดำเนินการ</th><th></th></tr></thead>
-    <tbody>{% for c in rep.s14 %}
-      <tr><td class="num">{{ loop.index }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
+    <tbody>{% for idx, c in items %}
+      <tr><td class="num">{{ idx }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
         <td>{{ c.complainant or c.victim or '' }}</td><td>{{ c.c_status }}</td><td>{{ c.actual_status }}</td>
         <td>{{ c.c_action or report.DEFAULT_ACTION }}</td><td>{{ edit(c, 's14') }}</td></tr>
     {% else %}<tr><td colspan="8" class="empty">ไม่มีคดีที่ต้องปรับปรุงข้อมูล</td></tr>{% endfor %}</tbody>
   </table></div>
+  {{ pager() }}
 
 {% elif tab == 's15' %}
   <p class="sub">สำนวนที่สถานะจริง "ระหว่างสอบสวน" และรับคำร้องทุกข์ก่อน {{ rep.as_of|th }} เกิน 6 เดือน · ช่องสีเหลือง = ยังไม่ได้กรอก</p>
-  {{ search('t15', rep.s15|length) }}
+  {{ search('t15') }}
   <div class="tbl-wrap"><table class="data" id="t15">
     <thead><tr><th>ลำดับ</th><th>กลุ่ม</th><th>เลขคดีอาญา</th><th>Case ID</th><th>ผู้เสียหาย</th><th>ความเสียหาย (บาท)</th><th>ศาล</th><th>วันที่รับคำร้องทุกข์</th><th>เหตุผลที่ค้าง</th><th>รายละเอียด</th><th>แนวทางเร่งรัด</th><th>หลักฐานที่แนบ</th><th></th></tr></thead>
-    <tbody>{% for r in rep.s15 %}{% set c = r.case %}
-      <tr><td class="num">{{ loop.index }}</td><td class="nowrap">{{ r.group }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
+    <tbody>{% for idx, r in items %}{% set c = r.case %}
+      <tr><td class="num">{{ idx }}</td><td class="nowrap">{{ r.group }}</td><td class="nowrap">{{ c.criminal_no }}</td><td class="nowrap">{{ cid(c) }}</td>
         <td>{{ r.victim or '' }}</td><td class="num">{{ r.damage|money }}</td>
         <td class="{{ 'missing' if not c.court }}">{{ c.court or '' }}</td><td class="nowrap">{{ r.date|be }}</td>
         <td class="{{ 'missing' if not c.backlog_reason }}">{{ c.backlog_reason or '' }}</td>
@@ -151,6 +166,7 @@
         <td>{{ edit(c, 's15') }}</td></tr>
     {% else %}<tr><td colspan="13" class="empty">ไม่มีสำนวนค้างเกิน 6 เดือน</td></tr>{% endfor %}</tbody>
   </table></div>
+  {{ pager() }}
 
 {% elif tab == 'settings' %}
   <form method="post" action="{{ url_for('owner_settings', owner_id=owner.id) }}" class="card">

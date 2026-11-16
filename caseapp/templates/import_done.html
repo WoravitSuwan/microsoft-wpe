@@ -14,8 +14,8 @@
     <thead><tr><th>เจ้าของ</th><th>จำนวนแถว</th><th></th></tr></thead>
     <tbody>{% for name, n in s.owners.items() %}
       <tr><td>{{ name }}</td><td class="n">{{ n }}</td>
-        <td><a href="{{ url_for('owner_view', owner_id=owner_ids[name]) }}">ดูรายงาน</a> ·
-            <a href="{{ url_for('owner_export', owner_id=owner_ids[name]) }}">ดาวน์โหลด Excel</a></td></tr>
+        <td>{% if owner_ids[name] %}<a href="{{ url_for('owner_view', owner_id=owner_ids[name]) }}">ดูรายงาน</a> ·
+            <a href="{{ url_for('owner_export', owner_id=owner_ids[name]) }}">ดาวน์โหลด Excel</a>{% endif %}</td></tr>
     {% endfor %}</tbody>
   </table>
 </div>

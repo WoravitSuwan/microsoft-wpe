@@ -4,7 +4,7 @@ import json
 import os
 import re
 import secrets
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 from urllib.parse import quote
 
@@ -19,6 +19,9 @@ from .thaidate import be_slash, ce_slash, thai_short, thai_short_time, to_iso
 
 
 ON_VERCEL = bool(os.environ.get("VERCEL"))
+UPLOAD_CHUNK = 2 * 1024 * 1024    # ขนาดต่อส่วน (ต่ำกว่าเพดาน 4.5 MB ของ Vercel)
+UPLOAD_MAX = 60 * 1024 * 1024     # ขนาดไฟล์สูงสุดที่รับ
+PAGE_SIZE = 1000                  # แถวต่อหน้าในตาราง
 
 
 class ConfigError(RuntimeError):
@@ -116,6 +119,11 @@ def _form_text(name):
     return v or None
 
 
+def _search_text(item):
+    data = item["case"] if "case" in item else item
+    return " ".join(str(v) for v in data.values() if v is not None).lower()
+
+
 def _role(text):
     return "admin" if text == "admin" else "officer"
 
@@ -140,7 +148,8 @@ def _register(app):
             g.user = get_db().execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
         if request.method == "POST" and not app.config.get("TESTING_NO_CSRF"):
             token = session.get("csrf")
-            if not token or not secrets.compare_digest(request.form.get("csrf", ""), token):
+            sent = request.headers.get("X-CSRF-Token") or request.form.get("csrf", "")
+            if not token or not secrets.compare_digest(sent, token):
                 abort(400, "CSRF token ไม่ถูกต้อง กรุณาโหลดหน้าใหม่")
         if request.endpoint not in ("setup", "static"):
             if get_db().execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
@@ -238,7 +247,18 @@ def _register(app):
         owner = owner_or_404(owner_id)
         rep = report.build(get_db(), owner_id)
         tab = request.args.get("tab", "summary")
-        return render_template("owner.html", owner=owner, rep=rep, counts=rep.counts(), tab=tab)
+        # แบ่งหน้าตารางละ PAGE_SIZE แถว (Vercel ส่งคำตอบได้ไม่เกิน 4.5 MB) ค้นหาได้ทุกหน้า
+        lists = {"s11": rep.s11, "s12": rep.s12, "s13": rep.s13, "s14": rep.s14, "s15": rep.s15}
+        q = (request.args.get("q") or "").strip()
+        rows = list(enumerate(lists.get(tab, []), start=1))
+        if q:
+            needle = q.lower()
+            rows = [(i, x) for i, x in rows if needle in _search_text(x)]
+        pages = max(1, -(-len(rows) // PAGE_SIZE))
+        page = min(max(1, _int(request.args.get("page")) or 1), pages)
+        items = rows[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+        return render_template("owner.html", owner=owner, rep=rep, counts=rep.counts(), tab=tab,
+                               items=items, q=q, page=page, pages=pages, total=len(rows))
 
     @app.route("/owners/<int:owner_id>/export")
     @login_required
@@ -395,6 +415,53 @@ def _register(app):
         return redirect(url_for("owner_view", owner_id=case["owner_id"]))
 
     # ---------------------------------------------------------- import
+    def _owner_mode():
+        """เจ้าของปลายทางของการนำเข้า: None = แยกอัตโนมัติ (ผู้ดูแลเท่านั้น)"""
+        if g.user["role"] != "admin":
+            return g.user["owner_id"]
+        mode = request.form.get("owner", "auto")
+        if mode == "auto":
+            return None
+        owner_or_404(int(mode))
+        return int(mode)
+
+    def _run_import(stream, filename, owner_id):
+        """นำเข้าไฟล์ แล้วคืนเลขที่ประวัติการนำเข้า (ImportError_ ถ้าไฟล์ไม่ถูกต้อง)"""
+        db = get_db()
+        is_admin = g.user["role"] == "admin"
+        try:
+            wb = importer.load(stream)
+            kind = importer.detect_kind(wb)
+            if kind == "tpo":
+                with batch(db):
+                    res = importer.import_tpo(db, wb, owner_id=owner_id, allow_move=is_admin)
+                m = re.search(r"(20\d{2})(\d{2})(\d{2})", filename)
+                tpo_date = (f"{m[1]}-{m[2]}-{m[3]}" if m else date.today().isoformat())
+                for oid in res["per_owner"]:
+                    db.execute("UPDATE owners SET tpo_date = ? WHERE id = ?", (tpo_date, oid))
+                label = "thaipoliceonline"
+            elif kind == "report":
+                with batch(db):
+                    res = importer.import_report(db, wb, owner_id=owner_id, allow_move=is_admin)
+                res["per_owner"] = {res["owner_id"]: res["rows"]}
+                label = "รายงานเดิม (เอกสารแนบ)"
+            else:
+                raise importer.ImportError_(
+                    "ไม่รู้จักรูปแบบไฟล์ ต้องเป็นไฟล์ export thaipoliceonline หรือไฟล์รายงานเอกสารแนบ")
+            names = {o["id"]: o["name"] for o in db.execute("SELECT id, name FROM owners")}
+            summary = {"kind": label, "rows": res["rows"], "created": res["created"],
+                       "updated": res["updated"], "locked": res["locked"],
+                       "owners": {names[k]: v for k, v in res["per_owner"].items()}}
+            cur = db.execute("INSERT INTO imports (filename, kind, user_id, summary) "
+                             "VALUES (?, ?, ?, ?)",
+                             (filename, kind, g.user["id"], json.dumps(summary, ensure_ascii=False)))
+            import_id = cur.lastrowid
+            db.commit()
+            return import_id
+        except Exception:
+            db.rollback()
+            raise
+
     @app.route("/import", methods=["GET", "POST"])
     @login_required
     def import_view():
@@ -402,51 +469,82 @@ def _register(app):
         is_admin = g.user["role"] == "admin"
         if not is_admin and not g.user["owner_id"]:
             return render_template("no_owner.html")
-        owners = db.execute("SELECT id, name FROM owners ORDER BY name").fetchall()
         if request.method == "POST":
             f = request.files.get("file")
             if not f or not f.filename:
                 flash("กรุณาเลือกไฟล์ Excel", "error")
                 return redirect(url_for("import_view"))
-            mode = request.form.get("owner", "auto") if is_admin else str(g.user["owner_id"])
-            owner_id = None if mode == "auto" else int(mode)
-            if owner_id is not None:
-                owner_or_404(owner_id)
             try:
-                wb = importer.load(f.stream)
-                kind = importer.detect_kind(wb)
-                if kind == "tpo":
-                    with batch(db):
-                        res = importer.import_tpo(db, wb, owner_id=owner_id, allow_move=is_admin)
-                    m = re.search(r"(20\d{2})(\d{2})(\d{2})", f.filename)
-                    tpo_date = (f"{m[1]}-{m[2]}-{m[3]}" if m else date.today().isoformat())
-                    for oid in res["per_owner"]:
-                        db.execute("UPDATE owners SET tpo_date = ? WHERE id = ?", (tpo_date, oid))
-                    label = "thaipoliceonline"
-                elif kind == "report":
-                    with batch(db):
-                        res = importer.import_report(db, wb, owner_id=owner_id,
-                                                     allow_move=is_admin)
-                    res["per_owner"] = {res["owner_id"]: res["rows"]}
-                    label = "รายงานเดิม (เอกสารแนบ)"
-                else:
-                    raise importer.ImportError_(
-                        "ไม่รู้จักรูปแบบไฟล์ ต้องเป็นไฟล์ export thaipoliceonline หรือไฟล์รายงานเอกสารแนบ")
-                names = {o["id"]: o["name"] for o in
-                         db.execute("SELECT id, name FROM owners").fetchall()}
-                summary = {"kind": label, "rows": res["rows"], "created": res["created"],
-                           "updated": res["updated"], "locked": res["locked"],
-                           "owners": {names[k]: v for k, v in res["per_owner"].items()}}
-                db.execute("INSERT INTO imports (filename, kind, user_id, summary) VALUES (?, ?, ?, ?)",
-                           (f.filename, kind, g.user["id"], json.dumps(summary, ensure_ascii=False)))
-                db.commit()
+                import_id = _run_import(f.stream, f.filename, _owner_mode())
             except importer.ImportError_ as exc:
-                db.rollback()
                 flash(str(exc), "error")
                 return redirect(url_for("import_view"))
-            return render_template("import_done.html", s=summary, filename=f.filename,
-                                   owner_ids={names[k]: k for k in res["per_owner"]})
-        return render_template("import.html", owners=owners, is_admin=is_admin)
+            return redirect(url_for("import_result", import_id=import_id))
+        owners = db.execute("SELECT id, name FROM owners ORDER BY name").fetchall()
+        return render_template("import.html", owners=owners, is_admin=is_admin,
+                               chunk_size=UPLOAD_CHUNK, max_size=UPLOAD_MAX)
+
+    @app.route("/import/chunk", methods=["POST"])
+    @login_required
+    def import_chunk():
+        """รับไฟล์ทีละส่วน (ส่วนละไม่เกิน UPLOAD_CHUNK) เก็บไว้ในฐานข้อมูลชั่วคราว"""
+        token = request.headers.get("X-Upload-Token", "")
+        try:
+            seq = int(request.headers.get("X-Chunk-Index", ""))
+        except ValueError:
+            seq = -1
+        data = request.get_data(cache=False)
+        if (not re.fullmatch(r"[0-9a-f]{32}", token) or not 0 <= seq < UPLOAD_MAX // UPLOAD_CHUNK + 1
+                or not data or len(data) > UPLOAD_CHUNK):
+            return {"error": "ข้อมูลส่วนของไฟล์ไม่ถูกต้อง"}, 400
+        db = get_db()
+        db.execute("DELETE FROM uploads WHERE token = ? AND seq = ? AND user_id = ?",
+                   (token, seq, g.user["id"]))
+        db.execute("INSERT INTO uploads (token, user_id, seq, data) VALUES (?, ?, ?, ?)",
+                   (token, g.user["id"], seq, data))
+        db.commit()
+        return {"ok": True}
+
+    @app.route("/import/finish", methods=["POST"])
+    @login_required
+    def import_finish():
+        """รวมส่วนของไฟล์แล้วนำเข้า คืน JSON {url} หรือ {error}"""
+        db = get_db()
+        if g.user["role"] != "admin" and not g.user["owner_id"]:
+            return {"error": "บัญชีนี้ยังไม่ได้ผูกกับเจ้าของข้อมูล"}, 403
+        token = request.form.get("token", "")
+        total = _int(request.form.get("chunks")) or 0
+        rows = db.execute("SELECT seq, data FROM uploads WHERE token = ? AND user_id = ? "
+                          "ORDER BY seq", (token, g.user["id"])).fetchall()
+        db.execute("DELETE FROM uploads WHERE token = ? AND user_id = ?", (token, g.user["id"]))
+        # ล้างส่วนที่ค้างจากการอัปโหลดที่ไม่สำเร็จ (เก่ากว่า 1 วัน)
+        db.execute("DELETE FROM uploads WHERE created_at < ?",
+                   ((datetime.now(timezone.utc) + timedelta(hours=7) - timedelta(days=1))
+                    .strftime("%Y-%m-%d %H:%M:%S"),))
+        db.commit()
+        if total < 1 or [r["seq"] for r in rows] != list(range(total)):
+            return {"error": "อัปโหลดไฟล์ไม่ครบ กรุณาลองใหม่"}, 400
+        data = b"".join(bytes(r["data"]) for r in rows)
+        try:
+            import_id = _run_import(io.BytesIO(data), request.form.get("filename", "upload.xlsx"),
+                                    _owner_mode())
+        except importer.ImportError_ as exc:
+            return {"error": str(exc)}, 400
+        return {"url": url_for("import_result", import_id=import_id)}
+
+    @app.route("/imports/<int:import_id>")
+    @login_required
+    def import_result(import_id):
+        db = get_db()
+        row = db.execute("SELECT * FROM imports WHERE id = ?", (import_id,)).fetchone()
+        if row is None:
+            abort(404)
+        if g.user["role"] != "admin" and row["user_id"] != g.user["id"]:
+            abort(403)
+        s = json.loads(row["summary"])
+        ids = {o["name"]: o["id"] for o in db.execute("SELECT id, name FROM owners")}
+        return render_template("import_done.html", s=s, filename=row["filename"],
+                               owner_ids={n: ids.get(n) for n in s["owners"]})
 
     # ---------------------------------------------------------- admin
     @app.route("/admin/users", methods=["GET", "POST"])
