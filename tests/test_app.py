@@ -133,7 +133,7 @@ def test_thai_dates():
 
 def test_requires_setup_then_login(app):
     c = app.test_client()
-    assert c.get("/").headers["Location"].endswith("/setup")
+    assert c.get("/").headers["Location"].endswith("/login")
     c.post("/setup", data={"username": "admin", "password": "secret1"})
     c.post("/logout")
     assert "/login" in c.get("/").headers["Location"]
@@ -335,7 +335,7 @@ def test_chunked_upload_rejects_missing_part_and_other_users(app, admin, monkeyp
 def test_chunk_requires_csrf_header(make_app):
     app = make_app("c2", TESTING_NO_CSRF=False)
     c = app.test_client()
-    page = c.get("/setup").get_data(as_text=True)
+    page = c.get("/login").get_data(as_text=True)
     token = re.search(r'name="csrf" value="([0-9a-f]+)"', page)[1]
     c.post("/setup", data={"username": "admin", "password": "secret1", "csrf": token})
     # เข้าสู่ระบบแล้ว session ถูกสร้างใหม่: ใช้ token จากหน้านำเข้า
@@ -568,11 +568,11 @@ def test_admin_reset_keep_admin(app, admin):
 def test_admin_reset_all_then_first_signup_is_admin(app, admin):
     do_import(admin, tpo_file(ROWS))
     r = admin.post("/admin/reset", data={"password": "secret1", "confirm": "ลบทั้งหมด", "mode": "all"})
-    assert r.headers["Location"].endswith("/setup")
+    assert r.headers["Location"].endswith("/login")
     c = app.test_client()
     page = c.get("/", follow_redirects=True).get_data(as_text=True)
-    assert "สมัครผู้ดูแลระบบ (คนแรก)" in page
-    c.post("/setup", data={"username": "newadmin", "password": "secret2"})
+    assert "เข้าสู่ระบบครั้งแรก" in page
+    c.post("/login", data={"username": "newadmin", "password": "secret2", "password2": "secret2"})
     assert "ผู้ใช้งาน" in c.get("/").get_data(as_text=True)
     assert owner_ids(app) == {}
     assert app.test_client().post("/admin/reset", data={}).status_code in (302, 403)
@@ -585,3 +585,29 @@ def test_officer_cannot_reset(app, admin):
     off = app.test_client()
     off.post("/login", data={"username": "a", "password": "secret1"})
     assert off.post("/admin/reset", data={"password": "secret1", "confirm": "ลบทั้งหมด"}).status_code == 403
+
+
+def test_first_login_becomes_admin(app):
+    c = app.test_client()
+    assert c.get("/").headers["Location"].endswith("/login")
+    page = c.get("/login").get_data(as_text=True)
+    assert "เข้าสู่ระบบครั้งแรก" in page and "ผู้ดูแลระบบ (admin)" in page
+    # ยืนยันรหัสผ่านไม่ตรง / ชื่อผู้ใช้ไม่ถูกต้อง: ยังไม่บันทึก
+    r = c.post("/login", data={"username": "boss", "password": "secret1", "password2": "secret9"})
+    assert "ยืนยันรหัสผ่านไม่ตรงกัน" in r.get_data(as_text=True)
+    assert "ชื่อผู้ใช้ต้อง" in c.post("/login", data={"username": "ผู้ดูแล", "password": "secret1",
+                                                     "password2": "secret1"}).get_data(as_text=True)
+    # ครั้งแรกที่กดเข้าสู่ระบบ = บันทึกเป็นผู้ดูแล และเข้าระบบทันที
+    r = c.post("/login", data={"username": "boss", "password": "secret1", "password2": "secret1"})
+    assert r.status_code == 302
+    page = c.get("/", follow_redirects=True).get_data(as_text=True)
+    assert "ผู้ใช้งาน" in page and "ผู้ดูแลระบบ" in page
+    # ครั้งต่อไปเป็นการเข้าสู่ระบบปกติ (ไม่สร้างบัญชีใหม่)
+    other = app.test_client()
+    assert "เข้าสู่ระบบครั้งแรก" not in other.get("/login").get_data(as_text=True)
+    r = other.post("/login", data={"username": "intruder", "password": "secret1", "password2": "secret1"})
+    assert "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง" in r.get_data(as_text=True)
+    assert other.post("/login", data={"username": "boss", "password": "secret1"}).status_code == 302
+    from caseapp.db import get_db
+    with app.app_context():
+        assert [(r["username"], r["role"]) for r in get_db().execute("SELECT username, role FROM users")] == [("boss", "admin")]

@@ -179,9 +179,9 @@ def _register(app):
             sent = request.headers.get("X-CSRF-Token") or request.form.get("csrf", "")
             if not token or not secrets.compare_digest(sent, token):
                 abort(400, "CSRF token ไม่ถูกต้อง กรุณาโหลดหน้าใหม่")
-        if request.endpoint not in ("setup", "static"):
-            if get_db().execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
-                return redirect(url_for("setup"))
+        if request.endpoint not in ("setup", "login", "static"):
+            if _no_users():
+                return redirect(url_for("login"))
 
     @app.after_request
     def no_store(resp):
@@ -198,28 +198,51 @@ def _register(app):
         return {"nav_owners": owners}
 
     # ---------------------------------------------------------- auth
+    def _no_users():
+        return get_db().execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+
+    def _create_first_admin():
+        """ระบบยังไม่มีบัญชี: ชื่อผู้ใช้/รหัสผ่านที่กรอกครั้งแรกบันทึกเป็นผู้ดูแลระบบ คืนข้อความผิดพลาดหรือ None"""
+        db = get_db()
+        u, p = _form_text("username"), request.form.get("password", "")
+        if not u or not re.fullmatch(r"[A-Za-z0-9_.@-]{3,40}", u):
+            return "ชื่อผู้ใช้ต้องเป็นตัวอักษรภาษาอังกฤษ ตัวเลข หรือ . _ - @ ยาว 3–40 ตัว"
+        if len(p) < 6:
+            return "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร"
+        if "password2" in request.form and p != request.form.get("password2"):
+            return "ยืนยันรหัสผ่านไม่ตรงกัน"
+        if not _no_users():  # มีคนบันทึกไปก่อนแล้ว
+            return "ระบบมีผู้ดูแลแล้ว กรุณาเข้าสู่ระบบ"
+        uid = db.execute("INSERT INTO users (username, password_hash, display_name, role) "
+                         "VALUES (?, ?, ?, 'admin')",
+                         (u, generate_password_hash(p), _form_text("display_name") or u)).lastrowid
+        db.commit()
+        session.clear()
+        session["uid"] = uid
+        flash(f"บันทึก {u} เป็นผู้ดูแลระบบแล้ว — ใช้ชื่อผู้ใช้และรหัสผ่านนี้เข้าสู่ระบบครั้งต่อไป", "ok")
+        return None
+
     @app.route("/setup", methods=["GET", "POST"])
     def setup():
-        db = get_db()
-        if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0:
-            return redirect(url_for("login"))
-        if request.method == "POST":
-            u, p = _form_text("username"), request.form.get("password", "")
-            if not u or len(p) < 6:
-                flash("กรุณากรอกชื่อผู้ใช้ และรหัสผ่านอย่างน้อย 6 ตัวอักษร", "error")
-            else:
-                cur = db.execute("INSERT INTO users (username, password_hash, display_name, role) "
-                                 "VALUES (?, ?, ?, 'admin')",
-                                 (u, generate_password_hash(p), _form_text("display_name") or u))
-                db.commit()
-                session.clear()
-                session["uid"] = cur.lastrowid
-                flash("สร้างผู้ดูแลระบบแล้ว", "ok")
+        """ลิงก์เดิม: การตั้งผู้ดูแลคนแรกย้ายไปอยู่ที่หน้าเข้าสู่ระบบแล้ว"""
+        if request.method == "POST" and _no_users():
+            error = _create_first_admin()
+            if error is None:
                 return redirect(url_for("index"))
-        return render_template("setup.html")
+            flash(error, "error")
+        return redirect(url_for("login"))
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
+        first_run = _no_users()
+        if first_run and request.method == "POST":
+            error = _create_first_admin()
+            if error is None:
+                return redirect(url_for("index"))
+            flash(error, "error")
+            return render_template("login.html", first_run=True, username=_form_text("username") or "")
+        if first_run:
+            return render_template("login.html", first_run=True, username="")
         if request.method == "POST":
             row = get_db().execute("SELECT * FROM users WHERE username = ?",
                                    (_form_text("username"),)).fetchone()
@@ -801,7 +824,7 @@ def _register(app):
             db.execute("DELETE FROM users")
             db.commit()
             session.clear()
-            return redirect(url_for("setup"))
+            return redirect(url_for("login"))
         db.commit()
         flash(f"ล้างข้อมูลทั้งระบบแล้ว: คดี {n_cases:,} รายการ, บัญชีผู้ใช้อื่น {n_users:,} บัญชี "
               "— ตั้งรหัสลงทะเบียนใหม่เพื่อให้คนในกองสมัคร", "ok")

@@ -1,6 +1,22 @@
 {% extends "_auth.html" %}
 {% block title %}เข้าสู่ระบบ · {{ unit_short }}{% endblock %}
 {% block card %}
+{% if first_run %}
+<h1>เข้าสู่ระบบครั้งแรก</h1>
+<div class="first-run">
+  <b>ระบบยังไม่มีบัญชีผู้ใช้</b>
+  ชื่อผู้ใช้และรหัสผ่านที่กรอกครั้งนี้จะถูกบันทึกเป็น <b>ผู้ดูแลระบบ (admin)</b>
+  — จดไว้ให้ดี ใช้เข้าสู่ระบบครั้งต่อไปและใช้สร้างรหัสให้คนในกอง
+</div>
+<form method="post">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+  <p><label>ชื่อผู้ใช้ (ภาษาอังกฤษ/ตัวเลข)</label>
+    <input type="text" name="username" value="{{ username }}" required autofocus autocomplete="username" autocapitalize="none" pattern="[A-Za-z0-9_.@-]{3,40}"></p>
+  <p><label>รหัสผ่าน (อย่างน้อย 6 ตัว)</label><input type="password" name="password" required minlength="6" autocomplete="new-password"></p>
+  <p><label>ยืนยันรหัสผ่าน</label><input type="password" name="password2" required minlength="6" autocomplete="new-password"></p>
+  <button class="btn primary" type="submit">เข้าสู่ระบบ และบันทึกเป็นผู้ดูแลระบบ</button>
+</form>
+{% else %}
 <h1>เข้าสู่ระบบ</h1>
 <p class="sub">แต่ละบัญชีเห็นเฉพาะข้อมูลคดีของตัวเอง</p>
 <form method="post">
@@ -10,4 +26,5 @@
   <button class="btn primary" type="submit">เข้าสู่ระบบ</button>
 </form>
 {% if register_open %}<div class="auth-alt">ยังไม่มีบัญชี? <a href="{{ url_for('register') }}">สมัครสมาชิก</a></div>{% endif %}
+{% endif %}
 {% endblock %}
