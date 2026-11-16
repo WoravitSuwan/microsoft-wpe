@@ -466,3 +466,8 @@ body.auth .flash.warn { color: #fcd34d; border-color: rgba(252, 211, 77, .35); }
 .dz-list { margin: 4px 0 14px; padding-left: 22px; color: #4b5568; font-size: .92rem; }
 .btn.danger-solid { color: #fff; border-color: transparent; background: linear-gradient(135deg, #dc2626, #991b1b); box-shadow: 0 8px 18px -8px rgba(185, 28, 28, .7); }
 .btn.danger-solid:hover { color: #fff; border-color: transparent; box-shadow: 0 12px 24px -8px rgba(185, 28, 28, .8); }
+
+/* ---------------------------------------------------------------- first-run notice on login */
+.first-run { margin: 6px 0 16px; padding: 12px 14px; border-radius: 12px; font-size: .92rem; line-height: 1.6; color: #f5e6bd;
+  background: linear-gradient(135deg, rgba(201, 162, 75, .18), rgba(34, 211, 238, .08)); border: 1px solid rgba(232, 205, 133, .45); }
+.first-run b { color: #fff; }
