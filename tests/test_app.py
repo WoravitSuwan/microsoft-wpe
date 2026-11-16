@@ -378,3 +378,56 @@ def test_import_error_messages(app, admin, monkeypatch):
     assert r.status_code == 401 and "เข้าสู่ระบบ" in r.get_json()["error"]
     # หน้า HTML ไม่ถูก cache
     assert admin.get("/import").headers["Cache-Control"] == "no-store"
+
+
+def upload_parts(client, data, token="ab" * 16, chunk=1 << 20):
+    n = max(1, -(-len(data) // chunk))
+    for i in range(n):
+        client.post("/import/chunk", data=data[i * chunk:(i + 1) * chunk],
+                    headers={"X-Upload-Token": token, "X-Chunk-Index": str(i)})
+    return {"token": token, "chunks": n, "filename": "ค่าเริ่มต้น__20261116_083829.xlsx"}
+
+
+def test_inspect_then_import_only_selected(app, admin):
+    """ไฟล์มีหลายคน แต่เลือกนำเข้าเฉพาะคนเดียว: คนอื่นต้องไม่ถูกสร้าง"""
+    up = upload_parts(admin, tpo_file(ROWS).getvalue())
+    r = admin.post("/import/inspect", data=up)
+    info = r.get_json()
+    assert info["kind"] == "tpo" and info["rows"] == 3
+    assert info["investigators"] == [{"name": A, "rows": 2, "exists": False},
+                                     {"name": B, "rows": 1, "exists": False}]
+    assert admin.post("/import/finish", data={**up, "select": "1"}).status_code == 400  # ไม่ได้เลือกใคร
+    up = upload_parts(admin, tpo_file(ROWS).getvalue(), token="cd" * 16)
+    r = admin.post("/import/finish", data={**up, "select": "1", "names": [A], "owner": "auto"})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    page = admin.get(r.get_json()["url"]).get_data(as_text=True)
+    assert "ข้าม (ไม่ได้เลือก)" in page
+    assert list(owner_ids(app)) == [A]
+    from caseapp.db import get_db
+    with app.app_context():
+        assert {r[0] for r in get_db().execute("SELECT case_id FROM cases")} == {"T001", "T002"}
+
+
+def test_officer_picks_rows_into_own_owner(app, admin):
+    """ผู้ใช้ทั่วไปเลือกคดีที่ระบบยังระบุพนักงานสอบสวนคนเดิม: เข้าเป็นของตัวเอง"""
+    admin.post("/admin/owners", data={"action": "create", "name": A})
+    admin.post("/admin/users", data={"action": "create", "username": "a", "password": "secret1",
+                                     "role": "officer", "owner_id": owner_ids(app)[A]})
+    off = app.test_client()
+    off.post("/login", data={"username": "a", "password": "secret1"})
+    assert A in off.get("/import").get_data(as_text=True)
+    up = upload_parts(off, tpo_file(ROWS).getvalue())
+    r = off.post("/import/finish", data={**up, "select": "1", "names": [A, B]})
+    assert r.status_code == 200
+    assert list(owner_ids(app)) == [A]
+    wb = export(off, owner_ids(app)[A])
+    assert [c.value for c in wb["1.1 Case ID ทั้งหมด"]["B"][4:7]] == ["T001", "T002", "T003"]
+
+
+def test_delete_many_owners(app, admin):
+    do_import(admin, tpo_file(ROWS))
+    ids = owner_ids(app)
+    r = admin.post("/admin/owners", data={"action": "delete_many", "ids": [ids[A], ids[B]]},
+                   follow_redirects=True)
+    assert "ลบเจ้าของข้อมูล 2 คน" in r.get_data(as_text=True)
+    assert owner_ids(app) == {}

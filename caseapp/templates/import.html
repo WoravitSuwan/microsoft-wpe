@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>นำเข้าไฟล์ Excel</h1>
-<p class="sub">ระบบตรวจรูปแบบไฟล์ให้อัตโนมัติ ข้อมูลที่กรอกในเว็บแล้ว (สอบปากคำ, คดีอาญา, ค้างเกิน 6 เดือน) จะไม่ถูกลบเมื่อนำเข้าซ้ำ</p>
+<p class="sub">ระบบตรวจรูปแบบไฟล์ให้อัตโนมัติ และให้เลือกได้ว่าจะนำเข้าคดีของพนักงานสอบสวนคนใดบ้าง ข้อมูลที่กรอกในเว็บแล้ว (สอบปากคำ, คดีอาญา, ค้างเกิน 6 เดือน) จะไม่ถูกลบเมื่อนำเข้าซ้ำ</p>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-bottom:18px">
   <div class="card" style="margin:0"><b>ไฟล์ export จาก thaipoliceonline</b>
     <p class="hint">เช่น ค่าเริ่มต้น__20261116_083829.xlsx — ใช้ทำข้อ 1.1 และแยกเจ้าของตามคอลัมน์ "พนักงานสอบสวน"</p></div>
@@ -15,31 +15,52 @@
   {% if is_admin %}
   <p><label>เจ้าของข้อมูล</label>
     <select name="owner">
-      <option value="auto">แยกอัตโนมัติตามชื่อพนักงานสอบสวนในไฟล์</option>
-      {% for o in owners %}<option value="{{ o.id }}">นำเข้าทั้งหมดเป็นของ {{ o.name }}</option>{% endfor %}
+      <option value="auto">แยกตามชื่อพนักงานสอบสวน (แต่ละคนเป็นเจ้าของคดีของตัวเอง)</option>
+      {% for o in owners %}<option value="{{ o.id }}">คดีที่เลือกทั้งหมดเป็นของ {{ o.name }}</option>{% endfor %}
     </select>
-    <span class="hint">เลือกเจ้าของเมื่อคดีในไฟล์ยังระบุพนักงานสอบสวนคนเดิม แต่โอนมาอยู่ในความรับผิดชอบของคนใหม่แล้ว</span></p>
+    <span class="hint">เลือกเจ้าของคนเดียวเมื่อคดีในไฟล์ยังระบุพนักงานสอบสวนคนเดิม แต่โอนมาอยู่ในความรับผิดชอบของคนใหม่แล้ว</span></p>
   {% else %}
-  <p class="hint">ข้อมูลทั้งหมดในไฟล์จะนำเข้าเป็นของคุณ</p>
+  <p class="hint">คดีที่เลือกนำเข้าจะเป็นของคุณ ({{ my_name }})</p>
   {% endif %}
-  <div class="row">
-    <button class="btn primary" id="import-btn">นำเข้า</button>
+  <p class="hint">หลังอัปโหลด ระบบจะแสดงรายชื่อพนักงานสอบสวนในไฟล์ ให้เลือกเฉพาะคนที่ต้องการนำเข้า</p>
+  <div class="row" id="import-actions">
+    <button class="btn primary" id="import-btn">อัปโหลดและเลือกคดี</button>
     <span class="hint" id="import-status" role="status"></span>
   </div>
+  <fieldset id="pick" hidden style="margin-top:14px">
+    <legend>เลือกพนักงานสอบสวนที่จะนำเข้า</legend>
+    <p class="hint" id="pick-summary" style="margin-top:0"></p>
+    <p class="row" style="margin:0 0 8px">
+      <button type="button" class="btn small" id="pick-all">เลือกทั้งหมด</button>
+      <button type="button" class="btn small" id="pick-none">ไม่เลือกเลย</button>
+      <input type="text" id="pick-filter" placeholder="ค้นหาชื่อ" style="max-width:220px">
+    </p>
+    <div id="pick-list" style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px 10px"></div>
+    <div class="row" style="margin-top:12px">
+      <button type="button" class="btn primary" id="pick-go">นำเข้า</button>
+      <button type="button" class="btn" id="pick-cancel">ยกเลิก</button>
+      <span class="hint" id="pick-status" role="status"></span>
+    </div>
+  </fieldset>
 </form>
 <script>
 // อัปโหลดเป็นส่วน ๆ ส่วนละไม่เกิน {{ chunk_size // 1024 // 1024 }} MB (Vercel รับคำขอได้ไม่เกิน 4.5 MB ต่อครั้ง)
+// แล้วให้เลือกพนักงานสอบสวนก่อนนำเข้า
 (function () {
   var form = document.getElementById('import-form');
   if (!window.fetch || !window.Blob || !form) return;
   var CHUNK = {{ chunk_size }}, MAX = {{ max_size }};
+  var MY_NAME = {{ my_name|tojson }};
   var csrf = form.querySelector('input[name=csrf]').value;
   var status = document.getElementById('import-status');
   var btn = document.getElementById('import-btn');
-  // ข้อความเมื่อ Vercel/เซิร์ฟเวอร์ตอบกลับเป็นหน้า error (ไม่ใช่ JSON)
+  var pick = document.getElementById('pick'), list = document.getElementById('pick-list');
+  var pickStatus = document.getElementById('pick-status'), goBtn = document.getElementById('pick-go');
+  var upload = null;  // {token, chunks, filename}
+
   function statusText(code) {
     if (code === 413) return 'ข้อมูลที่ส่งใหญ่เกินที่ Vercel รับได้ (413)';
-    if (code === 504) return 'ใช้เวลานำเข้านานเกินกำหนดของ Vercel (504 timeout) — ลองแบ่งไฟล์เป็นหลายไฟล์';
+    if (code === 504) return 'ใช้เวลานำเข้านานเกินกำหนดของ Vercel (504 timeout) — ลองเลือกคนน้อยลง หรือแบ่งไฟล์';
     if (code === 401 || code === 403) return 'หมดเวลาเข้าสู่ระบบหรือไม่มีสิทธิ์ (' + code + ') กรุณาเข้าสู่ระบบใหม่';
     if (code === 400) return 'คำขอไม่ถูกต้อง (400) กรุณาโหลดหน้านี้ใหม่แล้วลองอีกครั้ง';
     return 'เซิร์ฟเวอร์ตอบกลับผิดพลาด (' + code + ')';
@@ -48,23 +69,103 @@
     try { var j = await res.clone().json(); if (j && j.error) return j.error; } catch (_) {}
     return statusText(res.status);
   }
-  function fail(msg) {
-    status.textContent = msg; status.style.color = 'var(--err)';
-    btn.disabled = false;
+  function say(el, msg, bad) { el.textContent = msg; el.style.color = bad ? 'var(--err)' : ''; }
+  function fail(msg) { say(status, msg, true); btn.disabled = false; }
+  function baseForm() {
+    var fd = new FormData();
+    fd.append('csrf', csrf); fd.append('token', upload.token);
+    fd.append('chunks', upload.chunks); fd.append('filename', upload.filename);
+    var owner = form.querySelector('select[name=owner]');
+    if (owner) fd.append('owner', owner.value);
+    return fd;
   }
+  async function finish(names, statusEl) {
+    var fd = baseForm();
+    if (names) { fd.append('select', '1'); names.forEach(function (n) { fd.append('names', n); }); }
+    say(statusEl, 'กำลังนำเข้าข้อมูล… (ไฟล์ใหญ่อาจใช้เวลาสักครู่)');
+    var res = await fetch('{{ url_for("import_finish") }}', {method: 'POST', body: fd, credentials: 'same-origin'});
+    var out = {};
+    try { out = await res.clone().json(); } catch (_) {}
+    if (res.ok && out.url) { window.location = out.url; return true; }
+    say(statusEl, await errorOf(res), true);
+    return false;
+  }
+  function checked() {
+    return Array.from(list.querySelectorAll('input:checked'), function (c) { return c.value; });
+  }
+  function updateCount() {
+    var n = 0;
+    list.querySelectorAll('input:checked').forEach(function (c) { n += +c.dataset.rows; });
+    goBtn.textContent = 'นำเข้าคดีของคนที่เลือก (' + checked().length + ' คน, ' + n.toLocaleString() + ' คดี)';
+    goBtn.disabled = checked().length === 0;
+  }
+  function showPick(info) {
+    list.textContent = '';
+    info.investigators.forEach(function (p) {
+      var lab = document.createElement('label');
+      lab.style.cssText = 'display:flex;gap:8px;align-items:center;font-weight:400;padding:4px 0';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.value = p.name; cb.dataset.rows = p.rows;
+      cb.checked = !!MY_NAME && p.name === MY_NAME;
+      cb.addEventListener('change', updateCount);
+      var name = document.createElement('span'); name.textContent = p.name; name.style.flex = '1';
+      var n = document.createElement('span'); n.className = 'badge'; n.textContent = p.rows.toLocaleString() + ' คดี';
+      lab.append(cb, name, n);
+      if (p.exists) {
+        var ex = document.createElement('span'); ex.className = 'badge ok'; ex.textContent = 'มีในระบบแล้ว';
+        lab.append(ex);
+      }
+      list.append(lab);
+    });
+    say(document.getElementById('pick-summary'), 'ไฟล์ ' + upload.filename + ' มี ' + info.rows.toLocaleString() +
+        ' คดี จากพนักงานสอบสวน ' + info.investigators.length + ' คน — คนที่ไม่ได้เลือกจะไม่ถูกนำเข้า');
+    say(pickStatus, '');
+    updateCount();
+    pick.hidden = false;
+    document.getElementById('import-actions').hidden = true;
+    pick.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  }
+  document.getElementById('pick-all').onclick = function () {
+    list.querySelectorAll('label').forEach(function (l) {
+      if (l.style.display !== 'none') l.querySelector('input').checked = true;
+    });
+    updateCount();
+  };
+  document.getElementById('pick-none').onclick = function () {
+    list.querySelectorAll('input').forEach(function (c) { c.checked = false; }); updateCount();
+  };
+  document.getElementById('pick-filter').oninput = function () {
+    var q = this.value.trim().toLowerCase();
+    list.querySelectorAll('label').forEach(function (l) {
+      l.style.display = !q || l.textContent.toLowerCase().indexOf(q) !== -1 ? 'flex' : 'none';
+    });
+  };
+  document.getElementById('pick-cancel').onclick = function () {
+    pick.hidden = true; document.getElementById('import-actions').hidden = false;
+    btn.disabled = false; say(status, ''); upload = null;
+  };
+  goBtn.onclick = async function () {
+    var names = checked();
+    if (!names.length) return;
+    goBtn.disabled = true;
+    try {
+      if (!await finish(names, pickStatus)) goBtn.disabled = false;
+    } catch (err) { say(pickStatus, err.message || 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ', true); goBtn.disabled = false; }
+  };
+
   form.addEventListener('submit', async function (e) {
     var file = form.querySelector('input[type=file]').files[0];
     if (!file) return;
     e.preventDefault();
     if (file.size > MAX) return fail('ไฟล์ใหญ่เกิน ' + Math.round(MAX / 1048576) + ' MB');
     if (!/\.xlsx$/i.test(file.name)) return fail('รองรับเฉพาะไฟล์ .xlsx — ถ้าเป็น .xls หรือ .csv ให้เปิดใน Excel แล้ว Save As เป็น "Excel Workbook (.xlsx)"');
-    btn.disabled = true; status.style.color = '';
+    btn.disabled = true; say(status, '');
     var token = Array.from(crypto.getRandomValues(new Uint8Array(16)),
                            function (b) { return b.toString(16).padStart(2, '0'); }).join('');
     var chunks = Math.max(1, Math.ceil(file.size / CHUNK));
     try {
       for (var i = 0; i < chunks; i++) {
-        status.textContent = 'กำลังอัปโหลด ' + Math.round(i / chunks * 100) + '%';
+        say(status, 'กำลังอัปโหลด ' + Math.round(i / chunks * 100) + '%');
         var r = await fetch('{{ url_for("import_chunk") }}', {
           method: 'POST', credentials: 'same-origin',
           headers: {'X-CSRF-Token': csrf, 'X-Upload-Token': token, 'X-Chunk-Index': String(i),
@@ -73,17 +174,16 @@
         });
         if (!r.ok) throw new Error('อัปโหลดส่วนที่ ' + (i + 1) + '/' + chunks + ' ไม่สำเร็จ: ' + await errorOf(r));
       }
-      status.textContent = 'กำลังนำเข้าข้อมูล… (ไฟล์ใหญ่อาจใช้เวลาสักครู่)';
-      var fd = new FormData();
-      fd.append('csrf', csrf); fd.append('token', token); fd.append('chunks', chunks);
-      fd.append('filename', file.name);
-      var owner = form.querySelector('select[name=owner]');
-      if (owner) fd.append('owner', owner.value);
-      var res = await fetch('{{ url_for("import_finish") }}', {method: 'POST', body: fd, credentials: 'same-origin'});
-      var out = {};
-      try { out = await res.clone().json(); } catch (_) {}
-      if (res.ok && out.url) { window.location = out.url; return; }
-      fail(await errorOf(res));
+      upload = {token: token, chunks: chunks, filename: file.name};
+      say(status, 'กำลังอ่านรายชื่อพนักงานสอบสวนในไฟล์…');
+      var fd = baseForm();
+      var res = await fetch('{{ url_for("import_inspect") }}', {method: 'POST', body: fd, credentials: 'same-origin'});
+      if (!res.ok) return fail(await errorOf(res));
+      var info = await res.json();
+      if (info.kind === 'tpo' && info.investigators.length > 1) { say(status, ''); return showPick(info); }
+      // ไฟล์รายงานเดิม หรือมีพนักงานสอบสวนคนเดียว: นำเข้าเลย
+      var names = info.kind === 'tpo' ? info.investigators.map(function (p) { return p.name; }) : null;
+      if (!await finish(names, status)) btn.disabled = false;
     } catch (err) {
       fail(err.message || 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ');
     }

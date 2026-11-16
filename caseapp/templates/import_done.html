@@ -7,6 +7,7 @@
     <div class="stat"><div class="k">แถวที่อ่านได้</div><div class="v">{{ s.rows }}</div></div>
     <div class="stat"><div class="k">Case ID ใหม่</div><div class="v">{{ s.created }}</div></div>
     <div class="stat"><div class="k">อัปเดตของเดิม</div><div class="v">{{ s.updated }}</div></div>
+    {% if s.skipped %}<div class="stat"><div class="k">ข้าม (ไม่ได้เลือก)</div><div class="v">{{ s.skipped }}</div></div>{% endif %}
     {% if s.locked %}<div class="stat"><div class="k">ข้าม (ล็อกเจ้าของไว้)</div><div class="v">{{ s.locked }}</div></div>{% endif %}
   </div>
   <h2>แยกตามเจ้าของข้อมูล</h2>
